@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import type { World } from './world.ts';
 import type { Agent, AgentStore } from './agents.ts';
 import { TOOLS, runTool } from './tools.ts';
+import { worldRules } from './templates.ts';
 
 // Unter Windows liegt im PATH nur der npm-Shim claude.cmd, den spawn ohne Shell nicht startet.
 // Über cmd.exe wäre es heikel (mehrzeilige Prompts als Argumente), also die echte claude.exe suchen.
@@ -25,8 +26,10 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ' …' : 
 
 const HARNESS_NOTE = `Du bist in dieser Sitzung kein Assistent, der auf Aufträge wartet. Du hast einen Körper in einer simulierten Welt.
 Dein Arbeitsordner gehört dir und überdauert jede Sitzung; dein Kontext nicht.
-Lies zuerst SOUL.md, SEMANTIC_MEMORY.md und EPISODIC_MEMORY.md.
+Lies zuerst SOUL.md, SEMANTIC_MEMORY.md und EPISODIC_MEMORY.md (steht SOUL.md schon unten, genügen die beiden anderen).
 Dein Körper handelt selbständig nach Plänen (Act). Gib ihm mehrere Schritte auf einmal und denk weiter, während er handelt.`;
+
+const MCP_NAME = 'welt'; // Werkzeuge heissen in Claude Code dann mcp__welt__act usw.
 
 interface Handle {
   stop(): void;
@@ -182,13 +185,22 @@ export class Runners {
 
     const runOnce = (prompt: string, cont: boolean) =>
       new Promise<number>((resolve) => {
+        // Schlank: eigener System-Prompt statt dem von Claude Code, keine eingebauten Werkzeuge, keine
+        // Einstellungen/Hooks/CLAUDE.md des Nutzers; die Welt kommt als MCP-Server (siehe /mcp in index.ts).
+        // Gemessen: ~24k Tokens Grundkontext pro Runde → unter 1k.
+        let soul = '';
+        try { soul = store.readFile(agent, 'SOUL.md'); } catch {}
+        const mcp = { mcpServers: { [MCP_NAME]: { type: 'http', url: `${store.baseUrl}/mcp`, headers: { Authorization: `Bearer ${agent.token}` } } } };
         const args = [
           '-p', prompt,
           '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-          '--permission-mode', 'acceptEdits',
-          '--allowedTools', 'Bash(curl:*),Read,Write,Edit,Glob,Grep',
-          '--strict-mcp-config',
-          '--append-system-prompt', `${HARNESS_NOTE}\nDeinen Körper steuerst du über die HTTP-Schnittstelle in API.md (curl).`,
+          '--tools', '',
+          '--strict-mcp-config', '--mcp-config', JSON.stringify(mcp),
+          '--allowedTools', `mcp__${MCP_NAME}`,
+          '--setting-sources', '',
+          '--disable-slash-commands',
+          '--effort', 'low',
+          '--system-prompt', `${HARNESS_NOTE}\nDu handelst ausschliesslich über deine Werkzeuge.\n\n${worldRules()}\n\n${soul}`,
         ];
         if (agent.model) args.push('--model', agent.model);
         if (cont) args.push('--continue');
@@ -230,7 +242,7 @@ export class Runners {
           if (ev.type === 'assistant' && Array.isArray(content)) {
             for (const c of content) {
               if (c.type === 'text' && c.text) log('text', c.text);
-              else if (c.type === 'tool_use') log('tool', `${c.name} ${clip(JSON.stringify(c.input?.command ?? c.input?.file_path ?? c.input ?? {}), 600)}`);
+              else if (c.type === 'tool_use') log('tool', `${String(c.name).replace(`mcp__${MCP_NAME}__`, '')} ${clip(JSON.stringify(c.input?.command ?? c.input?.file_path ?? c.input ?? {}), 600)}`);
             }
           } else if (ev.type === 'user' && Array.isArray(content)) {
             for (const c of content) {

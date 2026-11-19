@@ -29,8 +29,10 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Ungeprüft: Browser-Darstellung Schritt 4 (Wippen, Kopf dreht zum Ziel, Idle-Atmen)
 - Ungeprüft: echter Lauf mit Claude-Code-Agenten (`Act`/`eat`/`drink`/`Reproduce`, Tod → `claude.exe` endet, Grab)
 - Offen: Runner „eigener Endpunkt" nur per API; kein Friedhof in der Oberfläche; kein Stumm-Schalter in der UI
-- Offen: Geist denkt langsam (jede Aktion = Bash/curl-Runde, `claude.exe` startet pro Lauf neu mit `--continue`);
-  Ideen: Modell fest auf Haiku/Sonnet, Tools per MCP statt curl, längere Pläne anregen
+- Erledigt: Denktempo Option A – Claude-Runner schlank über MCP (Reaktion ~1–2 s statt 3.6–6.2 s), siehe
+  [docs/geist-tempo.md](docs/geist-tempo.md); Weltregeln gemeinsam in `templates.ts` (`worldRules()`, `apiMd()`)
+- Ungeprüft: Runner „api" nutzt `worldRules()` noch nicht (System-Prompt ohne Weltregeln) – Nebenbefund
+- Offen: B als Schlaf/Träumen mit Energie-Bedürfnis (Gians Idee); C langlebiger Prozess gegen ~2.7 s Neustart
 
 ## Nächster Schritt
 1. Browser-Test (siehe „Ungeprüft") mit zwei Agenten durchführen; Fehler beheben. Danach Nebenpunkte aus „Offen"

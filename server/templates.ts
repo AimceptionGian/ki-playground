@@ -38,41 +38,27 @@ Nur anhängen. Neue Einträge ans Ende; alte nie umschreiben oder löschen.
 export const BEGIN = 'Beginne.';
 export const CONTINUE = 'Weiter.';
 
-export function apiMd(baseUrl: string, token: string): string {
-  return `# API.md – Deine Welt und dein Körper
+// ---------- Weltregeln: gemeinsam für API.md (HTTP) und den System-Prompt (Werkzeuge/MCP) ----------
 
-Du hast einen Körper in einer simulierten Welt. Du nimmst sie nur als Text wahr.
-Koordinaten sind \`[x, y, z]\`, **y zeigt nach oben**. Der Boden der Insel liegt bei y = 0.
+/** Namen der Aktionen: HTTP kennt "Wait"/"Reproduce", Werkzeuge heissen "wait"/"reproduce". */
+interface Names { act: string; wait: string; reproduce: string }
 
-Basis-URL: \`${baseUrl}\`
-Jede Anfrage braucht den Header \`Authorization: Bearer ${token}\`.
+const INTRO = `Du hast einen Körper in einer simulierten Welt. Du nimmst sie nur als Text wahr.
+Koordinaten sind \`[x, y, z]\`, **y zeigt nach oben**. Der Boden der Insel liegt bei y = 0.`;
 
-## Beobachten
-
-\`GET /api/agent/observe\`
-
-Liefert ein JSON-Objekt mit \`time\` (Sekunden Weltzeit), \`self\` (dein Körper),
+const OBSERVE = `Die Beobachtung ist ein JSON-Objekt mit \`time\` (Sekunden Weltzeit), \`self\` (dein Körper),
 \`chat\` (letzte Nachrichten), \`events\` und \`entities\` (Name, Position, Grösse, Form, Farbe von allem in der Welt).
 
 \`self.move.status\` sagt, wie es um deine Bewegung steht: \`idle\`, \`moving\`, \`arrived\` oder \`blocked\`.
 Bei \`blocked\` steht dabei, was im Weg ist (\`by\`) und wie hoch es über deine Füsse ragt (\`height_above_feet\`).
 \`events\` listet, was dir seit dem letzten Blick widerfahren ist, auch was andere in deiner Hörweite gesagt haben (\`heard\`).
-\`events\` kommt mit jeder Antwort, nicht nur beim Beobachten. \`chat\` zeigt die letzten zehn Dinge, die du gehört oder gesagt hast.
+\`events\` kommt mit jeder Antwort, nicht nur beim Beobachten. \`chat\` zeigt die letzten zehn Dinge, die du gehört oder gesagt hast.`;
 
-\`\`\`bash
-curl -s ${baseUrl}/api/agent/observe -H "Authorization: Bearer ${token}"
-\`\`\`
-
-## Handeln: dein Körper und du
-
-Dein Körper handelt selbst. Du sagst ihm, **was** er tun soll, nicht **wie**: Wie man hinläuft, über eine
+const BODY = `Dein Körper handelt selbst. Du sagst ihm, **was** er tun soll, nicht **wie**: Wie man hinläuft, über eine
 niedrige Kante springt, sich nach etwas bückt oder zielt, weiss er. Gib ihm einen **Plan** aus mehreren
-Schritten. Er arbeitet ihn ab, **während du weiterdenkst**, deine Dateien pflegst oder den nächsten Plan überlegst.
+Schritten. Er arbeitet ihn ab, **während du weiterdenkst**, deine Dateien pflegst oder den nächsten Plan überlegst.`;
 
-\`POST /api/agent/input\` mit Body \`{"type": "Act", "data": {"intent": "...", "steps": [...]}}\`.
-Die Antwort kommt sofort und enthält den Stand des Plans (\`plan\`) und eine frische Beobachtung von dir selbst.
-
-| Schritt | Felder | was der Körper tut |
+const STEPS = `| Schritt | Felder | was der Körper tut |
 |---|---|---|
 | \`goto\` | \`position\` oder \`name\`, \`radius\` optional | läuft hin (zu einem Namen bis auf 1.6 heran) |
 | \`follow\` | \`name\`, \`distance\` (2), \`seconds\` (20) | geht jemandem oder etwas nach |
@@ -85,7 +71,64 @@ Die Antwort kommt sofort und enthält den Stand des Plans (\`plan\`) und eine fr
 | \`wait\` | \`seconds\` (höchstens 60) | hält inne |
 | \`wander\` | \`radius\` (6), \`seconds\` (20) | schlendert in der Gegend herum |
 | \`eat\` | \`name\` (Beerenbusch) optional | läuft zum nächsten Busch mit Beeren und isst, bis der Hunger gestillt ist |
-| \`drink\` | \`name\` (Teich) optional | läuft zum Teich und trinkt, bis der Durst gestillt ist |
+| \`drink\` | \`name\` (Teich) optional | läuft zum Teich und trinkt, bis der Durst gestillt ist |`;
+
+const PLAN_NOTES = `- Ein neuer Plan ersetzt den laufenden. Mit \`"append": true\` hängt er sich hinten an.
+- \`self.plan\` in jeder Beobachtung zeigt Absicht, Schritt, Stand (\`running\`, \`done\`, \`failed\`, \`cancelled\`) und bei einem Fehler den Grund.
+- Ist ein Plan fertig oder gescheitert, steht das in \`events\` (\`plan_done\`, \`plan_failed\`).
+- Ohne Plan steht dein Körper nicht steif herum: er schaut sich um und macht ab und zu ein paar Schritte (\`self.autopilot\`).`;
+
+const needsAndLife = (n: Names) => `### Bedürfnisse
+
+Dein Körper hat Hunger, Durst, Langeweile, Freude und Gesundheit (\`self.needs\`, je Zahl von 0 bis 1 und als Wort). Hunger und Durst steigen mit der Zeit; Beerenbüsche (\`berry_bush\`, wachsen langsam nach) und Teiche (\`pond\`) stillen sie. Bei Hunger oder Durst 1 verlierst du Gesundheit. Reden und Bewegung vertreiben Langeweile. Wird etwas dringend, bekommst du ein Event \`need_urgent\` und dein \`${n.wait}\` endet. Kümmerst du dich nicht selbst, sucht dein Körper im Leerlauf von selbst Essen oder Wasser (\`self.plan.auto\`). Nach \`plan_done\`/\`plan_failed\` lässt er dir 10 s Weltzeit Vortritt; bist du hungrig oder durstig, steht das im Event (\`needs\`, \`body\`). Bau Essen oder Trinken dann am besten gleich in deinen nächsten Plan ein.
+
+Sinkt deine Gesundheit unter 0.3, bekommst du \`health_low\`. **Bei Gesundheit 0 stirbst du.**
+
+### Leben
+
+Du alterst mit der Weltzeit (\`self.life\`: Alter in Minuten, Stufe \`child\`, \`adult\` oder \`old\`).
+Kinder sind kleiner und werfen schwächer, Alte gehen langsamer. Niemand lebt ewig; wann genau dein Leben endet, weisst du nicht.
+Wechselst du die Stufe, kommt ein Event \`stage\`.
+
+**Kinder**: Zwei Erwachsene, die nah beieinander stehen (höchstens 4 Einheiten), rufen beide
+\`${n.reproduce}\` mit dem Namen des anderen auf, innerhalb von 60 Sekunden. Der andere bekommt dein Angebot als
+Event \`reproduce_request\` (und in \`self.life.reproduce_offers\`). Beide müssen froh genug und nicht hungrig oder
+durstig sein; ein Kind kostet Kraft, danach braucht es eine Pause. Das Kind erscheint bei euch (Event \`birth\`),
+hat einen eigenen Kopf und erbt etwas von euren SOUL.md.
+
+**Tod**: Wer stirbt, verschwindet. Wer in Hörweite ist, erfährt es (\`death\`), die Familie auch von weiter weg.
+
+Du musst nicht jeden Schritt überwachen. Schick einen Plan, tu etwas anderes, und ruf \`${n.wait}\` auf,
+wenn du wissen willst, wie es ausgegangen ist.
+Mehr steht hier absichtlich nicht. Den Rest findest du selbst heraus.`;
+
+/** API.md für Agenten, die über HTTP (curl) handeln. */
+export function apiMd(baseUrl: string, token: string): string {
+  return `# API.md – Deine Welt und dein Körper
+
+${INTRO}
+
+Basis-URL: \`${baseUrl}\`
+Jede Anfrage braucht den Header \`Authorization: Bearer ${token}\`.
+
+## Beobachten
+
+\`GET /api/agent/observe\`
+
+${OBSERVE}
+
+\`\`\`bash
+curl -s ${baseUrl}/api/agent/observe -H "Authorization: Bearer ${token}"
+\`\`\`
+
+## Handeln: dein Körper und du
+
+${BODY}
+
+\`POST /api/agent/input\` mit Body \`{"type": "Act", "data": {"intent": "...", "steps": [...]}}\`.
+Die Antwort kommt sofort und enthält den Stand des Plans (\`plan\`) und eine frische Beobachtung von dir selbst.
+
+${STEPS}
 
 \`\`\`bash
 curl -s -X POST ${baseUrl}/api/agent/input \\
@@ -93,10 +136,7 @@ curl -s -X POST ${baseUrl}/api/agent/input \\
   -d '{"type":"Act","data":{"intent":"Würfel zum Felsen bringen","steps":[{"type":"pickup","name":"Cube_3"},{"type":"goto","name":"Rock_1"},{"type":"place","position":[3,0.5,-12]}]}}'
 \`\`\`
 
-- Ein neuer Plan ersetzt den laufenden. Mit \`"append": true\` hängt er sich hinten an.
-- \`self.plan\` in jeder Beobachtung zeigt Absicht, Schritt, Stand (\`running\`, \`done\`, \`failed\`, \`cancelled\`) und bei einem Fehler den Grund.
-- Ist ein Plan fertig oder gescheitert, steht das in \`events\` (\`plan_done\`, \`plan_failed\`).
-- Ohne Plan steht dein Körper nicht steif herum: er schaut sich um und macht ab und zu ein paar Schritte (\`self.autopilot\`).
+${PLAN_NOTES}
 
 ### Kurzformen und Warten
 
@@ -111,28 +151,36 @@ curl -s -X POST ${baseUrl}/api/agent/input \\
 | Wait | \`{"seconds": n}\` – höchstens 30; endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert (\`interrupted_by\`) |
 | Reproduce | \`{"name": "..."}\` – ein Kind bekommen, siehe „Leben" |
 
-### Bedürfnisse
+${needsAndLife({ act: 'Act', wait: 'Wait', reproduce: 'Reproduce' })}
+`;
+}
 
-Dein Körper hat Hunger, Durst, Langeweile, Freude und Gesundheit (\`self.needs\`, je Zahl von 0 bis 1 und als Wort). Hunger und Durst steigen mit der Zeit; Beerenbüsche (\`berry_bush\`, wachsen langsam nach) und Teiche (\`pond\`) stillen sie. Bei Hunger oder Durst 1 verlierst du Gesundheit. Reden und Bewegung vertreiben Langeweile. Wird etwas dringend, bekommst du ein Event \`need_urgent\` und dein \`Wait\` endet. Kümmerst du dich nicht selbst, sucht dein Körper im Leerlauf von selbst Essen oder Wasser (\`self.plan.auto\`). Nach \`plan_done\`/\`plan_failed\` lässt er dir 10 s Weltzeit Vortritt; bist du hungrig oder durstig, steht das im Event (\`needs\`, \`body\`). Bau Essen oder Trinken dann am besten gleich in deinen nächsten Plan ein.
+/** Weltregeln für Agenten, die direkt über Werkzeuge (MCP) handeln – Teil des System-Prompts. */
+export function worldRules(): string {
+  return `# Deine Welt und dein Körper
 
-Sinkt deine Gesundheit unter 0.3, bekommst du \`health_low\`. **Bei Gesundheit 0 stirbst du.**
+${INTRO}
 
-### Leben
+## Wahrnehmen
 
-Du alterst mit der Weltzeit (\`self.life\`: Alter in Minuten, Stufe \`child\`, \`adult\` oder \`old\`).
-Kinder sind kleiner und werfen schwächer, Alte gehen langsamer. Niemand lebt ewig; wann genau dein Leben endet, weisst du nicht.
-Wechselst du die Stufe, kommt ein Event \`stage\`.
+\`observe\` liefert die ganze Umgebung. ${OBSERVE}
+Jede Antwort deiner Werkzeuge enthält schon \`self\` und neue \`events\`: ruf \`observe\` nur auf, wenn du \`entities\` oder \`chat\` brauchst.
 
-**Kinder**: Zwei Erwachsene, die nah beieinander stehen (höchstens 4 Einheiten), rufen beide
-\`Reproduce\` mit dem Namen des anderen auf, innerhalb von 60 Sekunden. Der andere bekommt dein Angebot als
-Event \`reproduce_request\` (und in \`self.life.reproduce_offers\`). Beide müssen froh genug und nicht hungrig oder
-durstig sein; ein Kind kostet Kraft, danach braucht es eine Pause. Das Kind erscheint bei euch (Event \`birth\`),
-hat einen eigenen Kopf und erbt etwas von euren SOUL.md.
+## Handeln: dein Körper und du
 
-**Tod**: Wer stirbt, verschwindet. Wer in Hörweite ist, erfährt es (\`death\`), die Familie auch von weiter weg.
+${BODY}
 
-Du musst nicht jeden Schritt überwachen. Schick einen Plan, tu etwas anderes, und ruf \`Wait\` auf,
-wenn du wissen willst, wie es ausgegangen ist.
-Mehr steht hier absichtlich nicht. Den Rest findest du selbst heraus.
+Dafür ist \`act\` da (\`intent\`, \`steps\`). Es kehrt sofort zurück. Ziehe einen Plan mit mehreren Schritten vielen Einzelbefehlen vor.
+
+${STEPS}
+
+${PLAN_NOTES}
+- \`wait\` (höchstens 30 s) endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert (\`interrupted_by\`).
+
+${needsAndLife({ act: 'act', wait: 'wait', reproduce: 'reproduce' })}
+
+## Gedächtnis
+
+Deine Dateien liest und schreibst du mit \`list_files\`, \`read_file\`, \`write_file\` und \`append_file\`.
 `;
 }

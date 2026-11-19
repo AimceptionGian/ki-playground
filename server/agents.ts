@@ -70,7 +70,7 @@ export class AgentStore {
   onNote: ((id: string, path: string, text: string, isNew: boolean) => void) | null = null;
   private seen = new Map<string, Map<string, { mtime: number; content: string }>>();
 
-  constructor(private baseUrl: string) {
+  constructor(readonly baseUrl: string) {
     fs.mkdirSync(WS, { recursive: true });
     fs.mkdirSync(LOGS, { recursive: true });
     if (fs.existsSync(FILE)) this.agents = JSON.parse(fs.readFileSync(FILE, 'utf8'));

@@ -24,6 +24,20 @@
 - Lokal (8 GB): Qwen3.5 4B 97.5 % bei Tool-Calls über LM Studio, Qwen3.5 9B Q4 ~6.6 GB –
   https://www.jdhodges.com/blog/local-llms-on-tool-calling-2026-pt1-local-lm/
 
+## Umgesetzt: Option A (2026-11-19)
+Claude-Runner startet mit `--tools ""`, `--mcp-config` (Welt als MCP-Server `welt`), `--setting-sources ""`,
+`--disable-slash-commands`, `--effort low`, eigenem `--system-prompt` (Harness-Notiz + `worldRules()` + SOUL.md).
+Leerer Lauf: ~24k → ~740 Tokens Grundkontext. Testlauf 90 s mit Haiku (isolierter Server, eigener Datenordner):
+- Reaktion nach `plan_done`/`plan_failed` bis zum nächsten `act`: 1.0–2.1 s, mit Gedächtnis-Schreiben dazwischen bis 3.7 s
+  (vorher median 3.6–6.2 s)
+- ~7k Tokens pro Runde (vorher ~48k); nur noch `act`-Pläne, keine Einzel-`MoveTo`
+- Nebeneffekt: Agenten bekommen Gians globales CLAUDE.md und SessionStart-Hook nicht mehr in den Kontext
+- Rest: Neustart nach Laufende kostet ~2.7 s (→ Option C)
+
+## Idee für B: Schlafen und Träumen
+Energie als neues Bedürfnis; müde Agenten gehen schlafen. Im Schlaf läuft ein eigener Lauf, der das Gedächtnis
+ordnet (SEMANTIC/EPISODIC schreiben, „träumen"). Tagsüber schreibt der Geist dann kaum noch → weniger Zusatzrunden.
+
 ## Optionen
 | # | Option | Gewinn (Schätzung) | Aufwand | Haken |
 |---|---|---|---|---|
