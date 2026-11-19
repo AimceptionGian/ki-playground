@@ -46,6 +46,8 @@ export class Scene {
   private paused = true;
   private ro: ResizeObserver;
   follow: string | null = null;
+  private recenter = false;
+  private home = new THREE.Vector3(0, 2, 0);
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -62,9 +64,10 @@ export class Scene {
     this.controls.enableDamping = true;
     // Verschieben bewegt den Drehpunkt auf der Bodenebene statt in der Bildebene
     this.controls.screenSpacePanning = false;
-    // Shift + Ziehen verschiebt von Haus aus; Alt + Ziehen soll dasselbe tun
+    // Shift + Ziehen verschiebt den Drehpunkt (von Haus aus). Alt + Klick holt ihn zurück zur Mitte der Insel.
     this.renderer.domElement.addEventListener('pointerdown', (e) => {
-      this.controls.mouseButtons.LEFT = e.altKey ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+      this.recenter = e.altKey;
+      if (e.altKey) e.stopImmediatePropagation();
     }, { capture: true });
     this.controls.maxPolarAngle = Math.PI / 2 - 0.04;
     this.controls.minDistance = 6;
@@ -266,6 +269,14 @@ export class Scene {
         this.controls.target.add(delta);
         this.camera.position.add(delta);
       }
+    }
+    if (this.recenter && !this.follow) {
+      // Drehpunkt und Kamera gemeinsam verschieben: Blickwinkel und Abstand bleiben
+      const rest = this.home.clone().sub(this.controls.target);
+      if (rest.lengthSq() < 0.0004) this.recenter = false;
+      const delta = rest.multiplyScalar(1 - Math.exp(-dt * 7));
+      this.controls.target.add(delta);
+      this.camera.position.add(delta);
     }
     if (!this.paused) this.water.uniforms.uTime.value += dt;
     this.controls.update();
