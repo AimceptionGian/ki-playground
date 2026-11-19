@@ -4,13 +4,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export interface StaticPart { name: string; center: number[]; size: number[]; ground?: boolean }
 export interface Snap {
   time: number; paused: boolean; speed: number; lock?: boolean; hold?: string[]; resetIn: number | null; resetCount: number;
-  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; ly?: number; holding: number | null; moving: boolean; grounded: boolean; n?: number[]; in?: string; g?: 'child' | 'adult' | 'old'; ag?: number; sc?: number }[];
+  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; ly?: number; holding: number | null; moving: boolean; grounded: boolean; n?: number[]; in?: string; g?: 'child' | 'adult' | 'old'; ag?: number; sc?: number; sl?: number }[];
   src?: { id: number; k: 'bush' | 'pond'; p: number[]; r: number; b: number; m: number }[];
   objs: { id: number; kind: 'cube' | 'rock' | 'ring'; s?: string; name: string; p: number[]; q: number[] }[];
 }
 
 interface Tracked { sig?: string; node: THREE.Object3D; pos: THREE.Vector3; quat: THREE.Quaternion; seen: number }
-interface AgentNode extends Tracked { yaw: number; look: number | null; head: THREE.Group; body: THREE.Object3D[]; phase: number; walk: number; yPrev: number; moving: boolean; scale: number; legs: THREE.Object3D[]; arms: THREE.Object3D[]; color: string; name: string; label: THREE.Sprite }
+interface AgentNode extends Tracked { yaw: number; look: number | null; head: THREE.Group; body: THREE.Object3D[]; phase: number; walk: number; yPrev: number; moving: boolean; scale: number; legs: THREE.Object3D[]; arms: THREE.Object3D[]; color: string; name: string; label: THREE.Sprite; eyes: THREE.Object3D[]; asleep: boolean; sleep: number }
 
 const WATER_FRAG = `
 uniform float uTime;
@@ -39,6 +39,7 @@ export class Scene {
   private controls: OrbitControls;
   private objs = new Map<number, Tracked>();
   private agents = new Map<string, AgentNode>();
+  private tmp = new THREE.Vector3();
   private sources = new Map<number, { node: THREE.Group; berries: THREE.Object3D[]; count: number }>();
   private water: THREE.ShaderMaterial;
   private staticGroup = new THREE.Group();
@@ -196,14 +197,15 @@ export class Scene {
       mesh.position.set(x, y, z);
       mesh.castShadow = true;
       head.add(mesh);
+      return mesh;
     };
     hbox(0.5, 0.46, 0.46, body, 0, 0.24, 0);
     const eye = new THREE.MeshBasicMaterial({ color: '#0a0f14' });
-    hbox(0.08, 0.1, 0.02, eye, -0.11, 0.26, 0.235);
-    hbox(0.08, 0.1, 0.02, eye, 0.11, 0.26, 0.235);
+    const eyes = [hbox(0.08, 0.1, 0.02, eye, -0.11, 0.26, 0.235), hbox(0.08, 0.1, 0.02, eye, 0.11, 0.26, 0.235)];
+    g.rotation.order = 'YXZ'; // erst Blickrichtung, dann hinlegen
     const label = this.makeLabel(a.name);
     g.add(label);
-    return { node: g, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0, yaw: a.yaw, moving: false, look: null, head, body: [torso], phase: Math.random() * 6.28, walk: 0, yPrev: a.p[1], scale: a.sc ?? 1, legs, arms, color: a.color, name: a.name, label };
+    return { node: g, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0, yaw: a.yaw, moving: false, look: null, head, body: [torso], phase: Math.random() * 6.28, walk: 0, yPrev: a.p[1], scale: a.sc ?? 1, legs, arms, color: a.color, name: a.name, label, eyes, asleep: false, sleep: 0 };
   }
 
   private makeSource(src: NonNullable<Snap['src']>[number]) {
@@ -279,6 +281,7 @@ export class Scene {
       n.yaw = a.yaw;
       n.look = a.ly ?? null;
       n.moving = a.moving && a.grounded;
+      n.asleep = !!a.sl;
       n.arms.forEach((arm) => (arm.rotation.x = a.holding !== null ? Math.PI : arm.rotation.x > 3 ? 0 : arm.rotation.x));
       n.seen = this.stamp;
     }
@@ -314,8 +317,13 @@ export class Scene {
     }
     for (const a of this.agents.values()) {
       const px = a.node.position.x, pz = a.node.position.z;
-      if (a.node.position.distanceToSquared(a.pos) > 400) a.node.position.copy(a.pos);
-      else a.node.position.lerp(a.pos, k);
+      const goal = this.tmp.copy(a.pos).setY(a.pos.y + 0.17 * a.scale * a.sleep);
+      if (a.node.position.distanceToSquared(goal) > 400) a.node.position.copy(goal);
+      else a.node.position.lerp(goal, k);
+      // Schlaf: langsam hinlegen (auf den Rücken), Augen zu, ruhiges tiefes Atmen
+      a.sleep += ((a.asleep ? 1 : 0) - a.sleep) * Math.min(1, dt * 2.5);
+      a.node.rotation.x = -Math.PI / 2 * a.sleep;
+      for (const e of a.eyes) e.scale.y = 1 - 0.85 * a.sleep;
       let d = a.yaw - a.node.rotation.y;
       d = Math.atan2(Math.sin(d), Math.cos(d));
       a.node.rotation.y += d * k;
@@ -334,6 +342,7 @@ export class Scene {
       const idle = this.paused ? 0 : 1 - a.walk;
       const bob = Math.abs(Math.cos(a.phase)) * 0.06 * a.walk;
       a.body[0].position.y = 1.01 + bob * 0.5;
+      a.body[0].scale.z = 1 + Math.sin(t * 0.8 + a.phase) * 0.06 * a.sleep;
       a.head.position.y = 1.32 + bob * 0.5 + Math.sin(t * 1.6 + a.phase) * 0.012 * idle;
       // Kopf schaut zum Ziel oder Sprecher (relativ zum Körper, begrenzt), im Leerlauf sanftes Umsehen
       let want = 0;
@@ -343,7 +352,7 @@ export class Scene {
       } else if (idle > 0.5) {
         want = Math.sin(t * 0.37 + a.phase) * 0.35 * Math.sin(t * 0.13 + a.phase * 2);
       }
-      a.head.rotation.y += (want - a.head.rotation.y) * Math.min(1, dt * 8);
+      a.head.rotation.y += (want * (1 - a.sleep) - a.head.rotation.y) * Math.min(1, dt * 8);
       a.head.rotation.x = Math.sin(t * 0.9 + a.phase) * 0.04 * idle;
     }
     if (this.follow) {

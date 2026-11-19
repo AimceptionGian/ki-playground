@@ -34,9 +34,18 @@ Leerer Lauf: ~24k → ~740 Tokens Grundkontext. Testlauf 90 s mit Haiku (isolier
 - Nebeneffekt: Agenten bekommen Gians globales CLAUDE.md und SessionStart-Hook nicht mehr in den Kontext
 - Rest: Neustart nach Laufende kostet ~2.7 s (→ Option C)
 
-## Idee für B: Schlafen und Träumen
-Energie als neues Bedürfnis; müde Agenten gehen schlafen. Im Schlaf läuft ein eigener Lauf, der das Gedächtnis
-ordnet (SEMANTIC/EPISODIC schreiben, „träumen"). Tagsüber schreibt der Geist dann kaum noch → weniger Zusatzrunden.
+## Umgesetzt: B als Schlafen und Träumen (2026-11-19)
+- Energie (`needs.energy`, 1 = hellwach): sinkt wach in ~15 min Weltzeit auf 0 (gehend ×1.3), Schlaf füllt in ~1 min.
+  Unter 0.2 langsamer und Eigenplan „schlafen", bei 0 schläft er sofort ein; `need_urgent` bei 0.12.
+- Schritt `sleep {seconds?}`; endet ausgeschlafen (0.98), bei dringendem Hunger/Durst, nach `seconds` oder durch neuen Plan.
+  Im Schlaf Hunger/Durst ×0.5, keine Langeweile. Events `fell_asleep`, `woke_up` (reason). Schlafende halten im Wartemodus nicht auf.
+- Runner: Einschlafen beendet den Tageslauf; Traum-Lauf mit `--continue` (Kontext des Tages), nur Datei-Werkzeuge
+  (`DREAM` in `templates.ts`); danach frische Sitzung „Du bist aufgewacht. …". API-Runner genauso (Werkzeuge gefiltert).
+- Client: liegt auf dem Rücken, Augen zu, tiefes Atmen; Energie-Balken.
+- Testlauf (Haiku, 8× Tempo): Agent plant selbst „ausruhen" → `fell_asleep` → Traum schreibt EPISODIC + ordnet SEMANTIC
+  (~7 s echt) → neue Sitzung liest Gedächtnis und handelt weiter. Keine Welt-Werkzeuge im Traum.
+- Beobachtet: Der Geist schreibt tagsüber trotzdem noch ab und zu ins Gedächtnis; nach dem Aufwachen 4–5 Leserunden
+  (~4 s) – Idee: Gedächtnisdateien direkt in den Aufwach-Prompt legen.
 
 ## Optionen
 | # | Option | Gewinn (Schätzung) | Aufwand | Haken |

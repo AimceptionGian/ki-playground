@@ -38,6 +38,15 @@ Nur anhängen. Neue Einträge ans Ende; alte nie umschreiben oder löschen.
 export const BEGIN = 'Beginne.';
 export const CONTINUE = 'Weiter.';
 
+/** Prompt für den Traum: der Geist ordnet im Schlaf sein Gedächtnis, danach wird der Kontext geleert. */
+export const DREAM = `Du bist eingeschlafen und träumst. Dein Körper ruht; handeln kannst du jetzt nicht, nur deine Dateien pflegen.
+Geh durch, was du seit dem letzten Aufwachen erlebt hast, und ordne dein Gedächtnis:
+- Häng die wichtigsten Erlebnisse an EPISODIC_MEMORY.jsonl an (append_file, je eine Zeile JSON mit timestamp, summary, detail).
+- Überarbeite SEMANTIC_MEMORY.md (read_file, dann write_file): Wissen über Orte, andere und Techniken, die funktionieren oder nicht.
+  Korrigiere Falsches, fasse Doppeltes zusammen, halte es kurz und nach Thema geordnet.
+- Wenn du magst, halte einen kurzen Traum fest.
+Beim Aufwachen ist dein Kontext leer: Was dann nicht in deinen Dateien steht, ist vergessen. Wenn du fertig bist, hör einfach auf.`;
+
 // ---------- Weltregeln: gemeinsam für API.md (HTTP) und den System-Prompt (Werkzeuge/MCP) ----------
 
 /** Namen der Aktionen: HTTP kennt "Wait"/"Reproduce", Werkzeuge heissen "wait"/"reproduce". */
@@ -71,7 +80,8 @@ const STEPS = `| Schritt | Felder | was der Körper tut |
 | \`wait\` | \`seconds\` (höchstens 60) | hält inne |
 | \`wander\` | \`radius\` (6), \`seconds\` (20) | schlendert in der Gegend herum |
 | \`eat\` | \`name\` (Beerenbusch) optional | läuft zum nächsten Busch mit Beeren und isst, bis der Hunger gestillt ist |
-| \`drink\` | \`name\` (Teich) optional | läuft zum Teich und trinkt, bis der Durst gestillt ist |`;
+| \`drink\` | \`name\` (Teich) optional | läuft zum Teich und trinkt, bis der Durst gestillt ist |
+| \`sleep\` | \`seconds\` optional | legt sich hin und schläft, bis er ausgeschlafen ist (oder Hunger/Durst weckt) |`;
 
 const PLAN_NOTES = `- Ein neuer Plan ersetzt den laufenden. Mit \`"append": true\` hängt er sich hinten an.
 - \`self.plan\` in jeder Beobachtung zeigt Absicht, Schritt, Stand (\`running\`, \`done\`, \`failed\`, \`cancelled\`) und bei einem Fehler den Grund.
@@ -83,6 +93,15 @@ const needsAndLife = (n: Names) => `### Bedürfnisse
 Dein Körper hat Hunger, Durst, Langeweile, Freude und Gesundheit (\`self.needs\`, je Zahl von 0 bis 1 und als Wort). Hunger und Durst steigen mit der Zeit; Beerenbüsche (\`berry_bush\`, wachsen langsam nach) und Teiche (\`pond\`) stillen sie. Bei Hunger oder Durst 1 verlierst du Gesundheit. Reden und Bewegung vertreiben Langeweile. Wird etwas dringend, bekommst du ein Event \`need_urgent\` und dein \`${n.wait}\` endet. Kümmerst du dich nicht selbst, sucht dein Körper im Leerlauf von selbst Essen oder Wasser (\`self.plan.auto\`). Nach \`plan_done\`/\`plan_failed\` lässt er dir 10 s Weltzeit Vortritt; bist du hungrig oder durstig, steht das im Event (\`needs\`, \`body\`). Bau Essen oder Trinken dann am besten gleich in deinen nächsten Plan ein.
 
 Sinkt deine Gesundheit unter 0.3, bekommst du \`health_low\`. **Bei Gesundheit 0 stirbst du.**
+
+### Schlaf
+
+Wach zu sein kostet Energie (\`self.needs.energy\`, 1 = hellwach). Müde gehst du langsamer und bist weniger froh.
+Ist deine Energie tief, legt sich dein Körper im Leerlauf von selbst schlafen; bei 0 schläft er ein, wo er steht.
+Du kannst auch selbst schlafen gehen (Schritt \`sleep\`). Im Schlaf erholst du dich in etwa einer Minute; Hunger und Durst
+steigen langsamer, und dringender Hunger oder Durst weckt dich (Events \`fell_asleep\`, \`woke_up\`).
+**Im Schlaf träumst du**: Du gehst durch, was du erlebt hast, und ordnest dein Gedächtnis. Beim Aufwachen ist dein
+Kontext leer, deine Dateien bleiben. Tagsüber musst du deshalb kaum etwas aufschreiben – nur, was du sofort brauchst.
 
 ### Leben
 

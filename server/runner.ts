@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import type { World } from './world.ts';
 import type { Agent, AgentStore } from './agents.ts';
 import { TOOLS, runTool } from './tools.ts';
-import { worldRules } from './templates.ts';
+import { worldRules, DREAM } from './templates.ts';
 
 // Unter Windows liegt im PATH nur der npm-Shim claude.cmd, den spawn ohne Shell nicht startet.
 // Über cmd.exe wäre es heikel (mehrzeilige Prompts als Argumente), also die echte claude.exe suchen.
@@ -30,6 +30,8 @@ Lies zuerst SOUL.md, SEMANTIC_MEMORY.md und EPISODIC_MEMORY.md (steht SOUL.md sc
 Dein Körper handelt selbständig nach Plänen (Act). Gib ihm mehrere Schritte auf einmal und denk weiter, während er handelt.`;
 
 const MCP_NAME = 'welt'; // Werkzeuge heissen in Claude Code dann mcp__welt__act usw.
+const FILE_TOOLS = TOOLS.filter((t) => t.files).map((t) => t.name);
+const WORLD_TOOLS = TOOLS.filter((t) => !t.files).map((t) => t.name);
 
 interface Handle {
   stop(): void;
@@ -90,6 +92,7 @@ export class Runners {
     let alive = true;
     const log = (kind: any, text: string) => store.log(agent.id, world.simTime, kind, text);
     const tools = TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+    const fileTools = tools.filter((t) => FILE_TOOLS.includes(t.function.name));
     const handle: Handle = { stop: () => { alive = false; ac.abort(); }, setPaused: () => {} };
 
     (async () => {
@@ -97,18 +100,34 @@ export class Runners {
       let sessionStart = -1;
       let resets = world.resetCount;
       let errors = 0;
+      let dreaming = false;
+      let woke = false;
       log('system', `Runner gestartet (${agent.model} @ ${agent.baseUrl})`);
       while (alive) {
         await world.whenRunning();
         if (!alive) break;
-        const expired = sessionStart < 0 || world.simTime - sessionStart > agent.sessionMinutes * 60 || world.resetCount !== resets || messages.length > 160;
+        // Schlaf: mit dem Kontext des Tages träumen, danach frische Sitzung (wie beim Claude-Runner)
+        if (!dreaming && world.isAsleep(agent.id)) {
+          if (sessionStart >= 0 && messages.length > 2) {
+            dreaming = true;
+            messages.push({ role: 'user', content: DREAM });
+            log('system', 'Schläft ein – träumt');
+          } else {
+            sessionStart = -1;
+            while (alive && world.isAsleep(agent.id)) await sleep(500);
+            woke = true;
+            continue;
+          }
+        }
+        const expired = !dreaming && (sessionStart < 0 || world.simTime - sessionStart > agent.sessionMinutes * 60 || world.resetCount !== resets || messages.length > 160);
         if (expired) {
           let soul = '';
           try { soul = store.readFile(agent, 'SOUL.md'); } catch {}
           messages = [
             { role: 'system', content: `${HARNESS_NOTE}\nDu handelst ausschliesslich über deine Werkzeuge.\n\n${soul}` },
-            { role: 'user', content: agent.beginPrompt },
+            { role: 'user', content: woke ? `Du bist aufgewacht. ${agent.beginPrompt}` : agent.beginPrompt },
           ];
+          woke = false;
           sessionStart = world.simTime;
           resets = world.resetCount;
           log('system', 'Neue Sitzung – Kontext geleert');
@@ -118,7 +137,7 @@ export class Runners {
             method: 'POST',
             signal: ac.signal,
             headers: { 'Content-Type': 'application/json', ...(agent.apiKey ? { Authorization: `Bearer ${agent.apiKey}` } : {}) },
-            body: JSON.stringify({ model: agent.model, messages, tools }),
+            body: JSON.stringify({ model: agent.model, messages, tools: dreaming ? fileTools : tools }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${clip(await res.text(), 400)}`);
           const data = (await res.json()) as any;
@@ -136,11 +155,20 @@ export class Runners {
               let args: any = {};
               try { args = JSON.parse(tc.function.arguments || '{}'); } catch {}
               log('tool', `${tc.function.name} ${clip(JSON.stringify(args), 600)}`);
-              const out = alive ? await runTool(world, store, agent, tc.function.name, args) : { ok: false, error: 'gestoppt' };
+              const out = !alive ? { ok: false, error: 'gestoppt' }
+                : dreaming && !FILE_TOOLS.includes(tc.function.name) ? { ok: false, error: 'Du schläfst und träumst; jetzt kannst du nur deine Dateien pflegen.' }
+                : await runTool(world, store, agent, tc.function.name, args);
               const text = typeof out === 'string' ? out : JSON.stringify(out);
               log('result', clip(text, 1200));
               messages.push({ role: 'tool', tool_call_id: tc.id, content: clip(text, 16000) });
             }
+          } else if (dreaming) {
+            // Traum fertig: beim Aufwachen beginnt eine frische Sitzung
+            dreaming = false;
+            sessionStart = -1;
+            log('system', 'Traum zu Ende');
+            while (alive && world.isAsleep(agent.id)) await sleep(500);
+            woke = true;
           } else {
             // wie im Paper: stoppt das Modell, bekommt es nur ein neutrales "Weiter."
             messages.push({ role: 'user', content: agent.continuePrompt });
@@ -183,7 +211,8 @@ export class Runners {
       },
     };
 
-    const runOnce = (prompt: string, cont: boolean) =>
+    let dreaming = false;
+    const runOnce = (prompt: string, cont: boolean, dream = false) =>
       new Promise<number>((resolve) => {
         // Schlank: eigener System-Prompt statt dem von Claude Code, keine eingebauten Werkzeuge, keine
         // Einstellungen/Hooks/CLAUDE.md des Nutzers; die Welt kommt als MCP-Server (siehe /mcp in index.ts).
@@ -196,7 +225,11 @@ export class Runners {
           '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
           '--tools', '',
           '--strict-mcp-config', '--mcp-config', JSON.stringify(mcp),
-          '--allowedTools', `mcp__${MCP_NAME}`,
+          // im Traum nur das Gedächtnis: die Welt-Werkzeuge sind gesperrt
+          ...(dream
+            ? ['--allowedTools', FILE_TOOLS.map((t) => `mcp__${MCP_NAME}__${t}`).join(','),
+               '--disallowedTools', WORLD_TOOLS.map((t) => `mcp__${MCP_NAME}__${t}`).join(',')]
+            : ['--allowedTools', `mcp__${MCP_NAME}`]),
           '--setting-sources', '',
           '--disable-slash-commands',
           '--effort', 'low',
@@ -269,23 +302,43 @@ export class Runners {
       let resets = world.resetCount;
       let errors = 0;
       log('system', `Runner gestartet (Claude Code${agent.model ? ', ' + agent.model : ''})`);
-      // Sitzung läuft ab → Prozess beenden, die Schleife startet eine frische
+      const asleep = () => world.isAsleep(agent.id);
+      let woke = false; // die nächste Sitzung beginnt nach einem Schlaf
+      // Sitzung läuft ab oder der Körper schläft ein → Prozess beenden, die Schleife macht weiter
       const watch = setInterval(() => {
+        if (dreaming || !proc?.pid) return;
         const expired = sessionStart >= 0 && (world.simTime - sessionStart > agent.sessionMinutes * 60 || world.resetCount !== resets);
-        if (expired && proc?.pid) { try { proc.kill('SIGTERM'); } catch {} }
-      }, 1000);
+        if (expired || asleep()) { try { proc.kill('SIGTERM'); } catch {} }
+      }, 500);
       while (alive) {
         await world.whenRunning();
         if (!alive) break;
+        if (asleep()) {
+          // Schlaf: mit dem Kontext des Tages träumen (Gedächtnis ordnen), danach beginnt eine frische Sitzung
+          if (sessionStart >= 0) {
+            log('system', 'Schläft ein – träumt');
+            dreaming = true;
+            const code = await runOnce(DREAM, true, true);
+            dreaming = false;
+            if (!alive) break;
+            log('system', code === 0 ? 'Traum zu Ende' : `Traum abgebrochen (Code ${code})`);
+            sessionStart = -1;
+            woke = true;
+          }
+          while (alive && asleep()) await sleep(500);
+          continue;
+        }
         const fresh = sessionStart < 0 || world.simTime - sessionStart > agent.sessionMinutes * 60 || world.resetCount !== resets;
         if (fresh) {
           sessionStart = world.simTime;
           resets = world.resetCount;
           log('system', 'Neue Sitzung – Kontext geleert');
         }
-        const code = await runOnce(fresh ? agent.beginPrompt : agent.continuePrompt, !fresh);
+        const prompt = fresh ? (woke ? `Du bist aufgewacht. ${agent.beginPrompt}` : agent.beginPrompt) : agent.continuePrompt;
+        woke = false;
+        const code = await runOnce(prompt, !fresh);
         if (!alive) break;
-        const killedForReset = world.resetCount !== resets || world.simTime - sessionStart > agent.sessionMinutes * 60;
+        const killedForReset = world.resetCount !== resets || world.simTime - sessionStart > agent.sessionMinutes * 60 || asleep();
         if (code !== 0 && !killedForReset) {
           errors++;
           if (errors >= 3) { log('error', 'Claude Code ist dreimal in Folge fehlgeschlagen – Runner angehalten.'); break; }

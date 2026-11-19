@@ -18,7 +18,7 @@ export const TOOLS: ToolDef[] = [
     description: 'Gib deinem Körper einen Plan: Schritte, die er selbständig nacheinander ausführt. Kehrt sofort zurück; während der Körper handelt, kannst du weiterdenken. '
       + 'Er läuft selbst zu Objekten hin, springt über niedrige Hindernisse und zielt beim Werfen. Ein neuer Plan ersetzt den laufenden, append: true hängt an. '
       + 'Schritte: goto {position|name, radius?} · follow {name, distance?, seconds?} · pickup {name|position} · place {position, rotation?} · '
-      + 'throw {at|position|direction, speed?} · jump · say {text} · look {name|position} · wait {seconds} · wander {radius?, seconds?} · eat {name?} (Beerenbusch) · drink {name?} (Teich)',
+      + 'throw {at|position|direction, speed?} · jump · say {text} · look {name|position} · wait {seconds} · wander {radius?, seconds?} · eat {name?} (Beerenbusch) · drink {name?} (Teich) · sleep {seconds?}',
     parameters: {
       type: 'object',
       properties: {

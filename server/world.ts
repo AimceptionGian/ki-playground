@@ -52,7 +52,9 @@ interface Body {
   idle: number; // Sekunden ohne Plan
   nextLook: number; // Weltzeit, zu der er sich im Leerlauf wieder umschaut
   needs: Needs;
-  urgent: { hunger: boolean; thirst: boolean }; // schon als dringend gemeldet
+  urgent: { hunger: boolean; thirst: boolean; energy: boolean }; // schon als dringend gemeldet
+  asleep: boolean; // schlief im letzten Physikschritt (für die Events fell_asleep/woke_up)
+  wake: string | null; // Grund, warum der laufende Schlaf endet
   cheer: number; // kurzer Freudenschub durch Reden und Spielen, klingt ab
   autoCool: number; // Weltzeit, vor der der Körper keinen neuen Eigenplan startet
   healthLow: boolean; // schon als gefährlich gemeldet
@@ -70,7 +72,7 @@ interface Body {
 export type Stage = 'child' | 'adult' | 'old';
 export interface BodyOpts { age?: number; nextBirthAge?: number; lifeFactor?: number; parents?: { id: string; name: string }[]; pos?: Vec3 }
 
-export interface Needs { hunger: number; thirst: number; boredom: number; joy: number; health: number }
+export interface Needs { hunger: number; thirst: number; boredom: number; joy: number; health: number; energy: number }
 
 /** Beerenbusch oder Teich: ortsfeste Quelle für Nahrung und Wasser. */
 interface Source {
@@ -111,7 +113,7 @@ interface Plan {
   sub: Record<string, any>; // Zustand des laufenden Schritts
 }
 
-export const STEP_TYPES = ['goto', 'follow', 'pickup', 'place', 'throw', 'jump', 'say', 'look', 'wait', 'wander', 'eat', 'drink'] as const;
+export const STEP_TYPES = ['goto', 'follow', 'pickup', 'place', 'throw', 'jump', 'say', 'look', 'wait', 'wander', 'eat', 'drink', 'sleep'] as const;
 const MAX_STEPS = 20;
 // Bedürfnisse: Anstieg pro Sekunde Weltzeit (bei Härte 1)
 const HUNGER_RATE = 1 / 600;
@@ -121,6 +123,12 @@ const URGENT = 0.8;
 const AUTO_NEED = 0.55; // ab hier sucht der Körper im Leerlauf selbst Essen oder Wasser
 const NEED_HINT = 0.4; // ab hier erwähnt plan_done/plan_failed Hunger bzw. Durst
 const MIND_GRACE = 10; // Sekunden Weltzeit nach Planende, in denen der Körper dem Geist den Vortritt lässt
+// Energie: 1 = hellwach. Sinkt im Wachsein (in rund 15 min auf 0), steigt im Schlaf (in rund 1 min wieder voll).
+const ENERGY_RATE = 1 / 900;
+const SLEEP_RATE = 1 / 60;
+const TIRED = 0.2; // ab hier geht der Körper im Leerlauf selbst schlafen und geht langsamer
+const URGENT_ENERGY = 0.12; // need_urgent für Energie
+const RESTED = 0.98; // ausgeschlafen
 const BERRY_FOOD = 0.3; // so viel Hunger stillt eine Beere
 const EAT_EVERY = 0.8; // Sekunden pro Beere
 const DRINK_RATE = 0.4; // Durst, der pro Sekunde sinkt
@@ -348,7 +356,7 @@ export class World {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...(opts.pos ?? spawn)).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, mv: [0, 0], bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1 }, urgent: { hunger: false, thirst: false }, cheer: 0, autoCool: 0, healthLow: false, grief: 0,
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, mv: [0, 0], bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1, energy: 0.9 }, urgent: { hunger: false, thirst: false, energy: false }, asleep: false, wake: null, cheer: 0, autoCool: 0, healthLow: false, grief: 0,
       age: 0, lifeFactor: opts.lifeFactor ?? 1, parents: opts.parents ?? [], stage: 'adult', offer: null, nextBirthAge: opts.nextBirthAge ?? 0, dead: null });
     const b = this.bodies.get(id)!;
     b.age = opts.age ?? FOUNDER_AGE * this.lifespan(b);
@@ -510,9 +518,20 @@ export class World {
   /** wait = steht in einem Wait · think = überlegt, die Welt wartet auf ihn · away = zu lange still, zählt nicht mit */
   private stateOf(b: Body, now: number): 'wait' | 'think' | 'away' | null {
     // solange der Körper einen Plan abarbeitet, hält der Geist die Welt nicht auf
-    if (b.waits > 0 || (b.plan?.status === 'running' && !b.plan.auto)) return 'wait';
+    // wer schläft (und träumt), hält die Welt nicht auf
+    if (b.waits > 0 || this.sleeping(b) || (b.plan?.status === 'running' && !b.plan.auto)) return 'wait';
     if (b.lastAct === 0) return b.driven ? 'think' : null;
     return now - b.lastAct < this.thinkTimeout * 1000 ? 'think' : b.driven || now - b.lastAct < 600_000 ? 'away' : null;
+  }
+
+  /** Schläft der Körper gerade? (laufender Plan steht auf einem sleep-Schritt) */
+  private sleeping(b: Body): boolean {
+    return b.plan?.status === 'running' && b.plan.steps[b.plan.idx]?.type === 'sleep';
+  }
+
+  isAsleep(id: string): boolean {
+    const b = this.bodies.get(id);
+    return !!b && this.sleeping(b);
   }
 
   /** Namen der Agenten, auf die die Welt im Wartemodus gerade wartet. */
@@ -955,6 +974,20 @@ export class World {
       }
       case 'wait':
         return elapsed >= Math.min(60, s.seconds!) ? 'done' : 'running';
+      case 'sleep': {
+        // hinlegen, wo man ist; Energie kommt zurück, bis man ausgeschlafen ist oder etwas weckt
+        if (!st.lying) { st.lying = true; b.wake = null; }
+        b.target = null;
+        b.move = 'idle';
+        b.lookYaw = null;
+        b.needs.energy = clamp01(b.needs.energy + SLEEP_RATE * DT);
+        const n = b.needs;
+        if (n.energy >= RESTED) b.wake = 'ausgeschlafen';
+        else if (n.thirst >= URGENT) b.wake = 'Durst';
+        else if (n.hunger >= URGENT) b.wake = 'Hunger';
+        else if (s.seconds !== undefined && elapsed >= s.seconds) b.wake = 'Zeit um';
+        return b.wake ? 'done' : 'running';
+      }
       case 'wander': {
         if (elapsed >= (s.seconds ?? 20)) { b.target = null; return 'done'; }
         st.center ??= v3(b.body.translation());
@@ -995,7 +1028,7 @@ export class World {
   }
 
   /** Wörter für den Geist: eine Zahl von 0 bis 1 allein sagt wenig. */
-  private word(kind: 'hunger' | 'thirst' | 'boredom' | 'joy' | 'health', v: number): string {
+  private word(kind: keyof Needs, v: number): string {
     const scale: Record<string, string[]> = {
       hunger: ['satt', 'nicht hungrig', 'etwas hungrig', 'hungrig', 'sehr hungrig', 'am Verhungern'],
       thirst: ['nicht durstig', 'kaum durstig', 'etwas durstig', 'durstig', 'sehr durstig', 'am Verdursten'],
@@ -1003,13 +1036,14 @@ export class World {
       joy: ['niedergeschlagen', 'bedrückt', 'gedämpft', 'zufrieden', 'froh', 'überglücklich'],
       // Gesundheit: 1 = gesund, daher umgekehrt gelesen
       health: ['dem Tod nah', 'schwer angeschlagen', 'angeschlagen', 'leicht angeschlagen', 'gesund', 'kerngesund'],
+      energy: ['erschöpft', 'sehr müde', 'müde', 'etwas müde', 'wach', 'hellwach'],
     };
     return scale[kind][Math.min(5, Math.floor(v * 5.99))];
   }
 
   private needsInfo(b: Body) {
     const out: Record<string, { value: number; word: string }> = {};
-    for (const k of ['hunger', 'thirst', 'boredom', 'joy', 'health'] as const) out[k] = { value: r2(b.needs[k]), word: this.word(k, b.needs[k]) };
+    for (const k of ['hunger', 'thirst', 'boredom', 'joy', 'health', 'energy'] as const) out[k] = { value: r2(b.needs[k]), word: this.word(k, b.needs[k]) };
     return out;
   }
 
@@ -1019,13 +1053,17 @@ export class World {
     const hard = this.hardness;
     const v = b.body.linvel();
     const walking = b.grounded && Math.hypot(v.x, v.z) > 0.5;
-    n.hunger = clamp01(n.hunger + HUNGER_RATE * hard * (walking ? 1.5 : 1) * DT);
-    n.thirst = clamp01(n.thirst + THIRST_RATE * hard * (walking ? 1.3 : 1) * DT);
+    const asleep = this.sleeping(b);
+    // im Schlaf zehrt der Körper nur halb so schnell; Langeweile ruht
+    const slow = asleep ? 0.5 : 1;
+    n.hunger = clamp01(n.hunger + HUNGER_RATE * hard * slow * (walking ? 1.5 : 1) * DT);
+    n.thirst = clamp01(n.thirst + THIRST_RATE * hard * slow * (walking ? 1.3 : 1) * DT);
+    if (!asleep) n.energy = clamp01(n.energy - ENERGY_RATE * (walking ? 1.3 : 1) * DT);
     // Langeweile sinkt, wenn man sich bewegt (Neues sieht), steigt sonst
-    n.boredom = clamp01(n.boredom + (walking ? -BORED_RATE * 1.2 : BORED_RATE) * DT);
+    if (!asleep) n.boredom = clamp01(n.boredom + (walking ? -BORED_RATE * 1.2 : BORED_RATE) * DT);
     b.cheer = Math.max(0, b.cheer - DT / 60);
     b.grief = Math.max(0, b.grief - DT / 600);
-    const target = clamp01(0.85 - 0.5 * n.hunger - 0.5 * n.thirst - 0.4 * n.boredom + b.cheer * 0.4 - b.grief * 0.6);
+    const target = clamp01(0.85 - 0.5 * n.hunger - 0.5 * n.thirst - 0.4 * n.boredom - 0.5 * Math.max(0, 0.4 - n.energy) + b.cheer * 0.4 - b.grief * 0.6);
     n.joy = clamp01(n.joy + (target - n.joy) * Math.min(1, DT * 0.1));
     if (n.boredom >= 1) n.joy = Math.max(0, n.joy - 0.1 * DT);
     let dmg = 0;
@@ -1040,6 +1078,11 @@ export class World {
         this.interruptWaits(b, 'need_urgent');
       } else if (b.urgent[k] && n[k] < 0.6) b.urgent[k] = false;
     }
+    if (!b.urgent.energy && n.energy <= URGENT_ENERGY && !asleep) {
+      b.urgent.energy = true;
+      b.events.push({ time: r2(this.simTime), type: 'need_urgent', need: 'energy', word: this.word('energy', n.energy) });
+      this.interruptWaits(b, 'need_urgent');
+    } else if (b.urgent.energy && n.energy > 0.4) b.urgent.energy = false;
     if (!b.healthLow && n.health < 0.3) {
       b.healthLow = true;
       b.events.push({ time: r2(this.simTime), type: 'health_low', word: this.word('health', n.health) });
@@ -1082,7 +1125,8 @@ export class World {
       let steps: Step[] | null = null;
       let why = '';
       if (n.thirst >= AUTO_NEED && n.thirst >= n.hunger && this.nearestSource(b, 'pond', false)) { steps = [{ type: 'drink' }]; why = 'trinken'; }
-      else if (n.hunger >= AUTO_NEED &&this.nearestSource(b, 'bush', true)) { steps = [{ type: 'eat' }]; why = 'essen'; }
+      else if (n.hunger >= AUTO_NEED && this.nearestSource(b, 'bush', true)) { steps = [{ type: 'eat' }]; why = 'essen'; }
+      else if (n.energy <= TIRED && b.grounded) { steps = [{ type: 'sleep' }]; why = 'schlafen'; }
       else if (n.boredom >= 0.7) { steps = [{ type: 'wander', radius: 12, seconds: 15 }]; why = 'umherschlendern'; }
       if (steps) {
         b.plan = { id: this.nextPlanId++, intent: `(von selbst) ${why}`, steps, idx: 0, status: 'running', auto: true, sub: {} };
@@ -1152,8 +1196,26 @@ export class World {
     for (const b of this.bodies.values()) {
       this.tickLife(b);
       this.tickNeeds(b);
+      // völlig erschöpft: schläft ein, wo er steht, egal was er gerade vorhatte
+      if (b.needs.energy <= 0 && !this.sleeping(b) && !b.dead) {
+        if (b.plan?.status === 'running') b.plan.status = 'cancelled';
+        b.auto = false;
+        b.plan = { id: this.nextPlanId++, intent: '(erschöpft) eingeschlafen', steps: [{ type: 'sleep' }], idx: 0, status: 'running', auto: true, sub: {} };
+      }
       if (b.plan?.status === 'running') this.advance(b);
       else this.idleBody(b);
+      const zz = this.sleeping(b);
+      if (zz !== b.asleep) {
+        b.asleep = zz;
+        if (zz) {
+          b.wake = null;
+          b.events.push({ time: r2(this.simTime), type: 'fell_asleep', word: this.word('energy', b.needs.energy) });
+          this.interruptWaits(b, 'fell_asleep');
+        } else {
+          b.events.push({ time: r2(this.simTime), type: 'woke_up', reason: b.wake ?? 'geweckt', word: this.word('energy', b.needs.energy) });
+          b.wake = null;
+        }
+      }
       this.driveBody(b);
     }
     for (const o of this.objs) if (!o.heldBy && !o.lost) o.prevVel = v3(o.body.linvel());
@@ -1230,7 +1292,7 @@ export class World {
             b.events.push({ time: r2(this.simTime), type: 'blocked', ...b.block });
           }
         }
-        const walk = b.stage === 'old' ? WALK_SPEED * 0.7 : WALK_SPEED;
+        const walk = (b.stage === 'old' ? WALK_SPEED * 0.7 : WALK_SPEED) * (b.needs.energy < TIRED ? 0.75 : 1); // müde = langsamer
         const s = Math.min(b.auto ? walk * 0.35 : walk, Math.sqrt(2 * DECEL * d * 0.8), d / DT);
         vx = (dx / d) * s;
         vz = (dz / d) * s;
@@ -1400,7 +1462,7 @@ export class World {
       entities.push({
         name: other.name, entity_type: 'agent', shape: 'capsule', anchored: false,
         position: rv3(other.body.translation()), size: [P_RAD * 2, (P_HALF + P_RAD) * 2, P_RAD * 2],
-        color: other.color, holding: other.holding?.name ?? null, stage: other.stage,
+        color: other.color, holding: other.holding?.name ?? null, stage: other.stage, ...(this.sleeping(other) ? { sleeping: true } : {}),
       });
     }
     return {
@@ -1419,6 +1481,7 @@ export class World {
         needs: this.needsInfo(b),
         life: this.lifeInfo(b),
         ...(b.auto ? { autopilot: 'schlendert ein paar Schritte' } : {}),
+        ...(this.sleeping(b) ? { sleeping: true } : {}),
       },
       events: b.events.splice(0),
       chat: b.heard.slice(-10),
@@ -1444,7 +1507,7 @@ export class World {
     const now = performance.now();
     const agents = [...this.bodies.values()].map((b) => {
       const p = b.body.translation();
-      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), ly: b.lookYaw === null ? undefined : r2(b.lookYaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, n: [r2(b.needs.hunger), r2(b.needs.thirst), r2(b.needs.boredom), r2(b.needs.joy), r2(b.needs.health)], g: b.stage, ag: Math.floor(b.age / 60), sc: r2(this.scaleOf(b)), in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
+      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), ly: b.lookYaw === null ? undefined : r2(b.lookYaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, n: [r2(b.needs.hunger), r2(b.needs.thirst), r2(b.needs.boredom), r2(b.needs.joy), r2(b.needs.health), r2(b.needs.energy)], ...(this.sleeping(b) ? { sl: 1 } : {}), g: b.stage, ag: Math.floor(b.age / 60), sc: r2(this.scaleOf(b)), in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
     });
     const objs = this.objs.filter((o) => !o.lost).map((o) => {
       const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;

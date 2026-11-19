@@ -19,6 +19,7 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Stimmen: Piper lokal im venv `data/piper/venv`, Modelle `data/piper/models` (thorsten-medium, eva_k-x_low; gitignored);
   Stimme stabil aus Hash der Id, Kinder Rate ×1.3, Alte ×0.94; Tonhöhe = Abspielrate im Browser; ohne Piper stumm
 - Bevölkerung über Alterung und Härte statt Obergrenze
+- Schlaf = natürliches Leeren des Kontexts: Traum-Lauf ordnet das Gedächtnis, danach frische Sitzung (Gians Idee)
 
 ## Stand
 - Erledigt: Schritte 1–5 (Stimmen: `58232eb`; `server/voice.ts`, `client/src/voice.ts`, Event `{t:'voice'}`, `/voices` statisch)
@@ -32,7 +33,9 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Erledigt: Denktempo Option A – Claude-Runner schlank über MCP (Reaktion ~1–2 s statt 3.6–6.2 s), siehe
   [docs/geist-tempo.md](docs/geist-tempo.md); Weltregeln gemeinsam in `templates.ts` (`worldRules()`, `apiMd()`)
 - Ungeprüft: Runner „api" nutzt `worldRules()` noch nicht (System-Prompt ohne Weltregeln) – Nebenbefund
-- Offen: B als Schlaf/Träumen mit Energie-Bedürfnis (Gians Idee); C langlebiger Prozess gegen ~2.7 s Neustart
+- Erledigt: Energie, Schlaf und Träumen (Gedächtnis ordnen im Schlaf, danach frischer Kontext), siehe docs/geist-tempo.md
+- Ungeprüft: Schlafpose im Browser (liegt auf dem Rücken, Augen zu, Energie-Balken)
+- Offen: Gedächtnis in den Aufwach-Prompt legen (spart ~4 s Leserunden); C langlebiger Prozess gegen ~2.7 s Neustart
 
 ## Nächster Schritt
 1. Browser-Test (siehe „Ungeprüft") mit zwei Agenten durchführen; Fehler beheben. Danach Nebenpunkte aus „Offen"

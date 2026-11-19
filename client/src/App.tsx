@@ -25,13 +25,14 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
   return data;
 }
 
-// Hunger, Durst, Langeweile: hoch = schlecht. Freude, Gesundheit: hoch = gut.
+// Hunger, Durst, Langeweile: hoch = schlecht. Freude, Gesundheit, Energie: hoch = gut.
 const NEED_BARS: { label: string; bad: boolean; color: string }[] = [
   { label: 'Hunger', bad: true, color: '#e0a03a' },
   { label: 'Durst', bad: true, color: '#4aa3df' },
   { label: 'Langeweile', bad: true, color: '#a58bd6' },
   { label: 'Freude', bad: false, color: '#f4d35e' },
   { label: 'Gesundheit', bad: false, color: '#6fd08c' },
+  { label: 'Energie', bad: false, color: '#5ad1c8' },
 ];
 function NeedBars({ n }: { n: number[] }) {
   return (
