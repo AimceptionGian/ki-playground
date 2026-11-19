@@ -41,7 +41,13 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Erledigt: Gedächtnis im Start-Prompt (Test: erstes `act` nach 1.6 s, keine Leserunden mehr)
 - Erledigt: Umlaute (Phoneme geprüft: „Grüsse“ → ɡ r ʏ s ə) und Englisch (eigene Stimme, WAV erzeugt)
 - Ungeprüft: englische Stimmen im Browser anhören
-- Offen: Geist schreibt tagsüber trotz Traum noch ab und zu ins Gedächtnis; C langlebiger Prozess gegen ~2.7 s Neustart
+- Erledigt: Anleitung strenger: tagsüber nichts aufschreiben, nur im Traum (templates.ts; bestehende SOUL.md der Agenten
+  sagen noch „pflege sie, während du lebst" – nur neue Agenten bekommen den neuen Text)
+- Erledigt: Sprünge. Ursache: in der Luft keine Steuerung → an der Wand Vorwärtstempo 0, Sprung senkrecht, Landung davor
+  (0/9 Stufen geschafft). Fix: Luftsteuerung Richtung Ziel (`AIR_ACCEL`), Reflex „Stufe voraus → im Lauf abspringen"
+  (`stepAhead`), Reflex „Kante voraus und Ziel höher → abspringen" (`edgeAhead`, z. B. Lücke EastStep→EastMesa).
+  Prüfskript im Scratchpad (`jumps.mts`): 11/11 inkl. flach/hinunter ohne Sprung; Stufen in ~1.7 s statt 2.4 s
+- Offen: C langlebiger Prozess gegen ~2.7 s Neustart; Bewegungs-Prüfskript ins Projekt übernehmen (bisher keine Teststelle)
 
 ## Nächster Schritt
 1. Browser-Test (siehe „Ungeprüft") mit zwei Agenten durchführen; Fehler beheben. Danach Nebenpunkte aus „Offen"

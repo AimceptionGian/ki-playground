@@ -144,6 +144,7 @@ const STAGE_WORD: Record<Stage, string> = { child: 'Kind', adult: 'erwachsen', o
 const TURN_SPEED = 9; // rad/s
 const ACCEL = 28; // m/s² beim Anlaufen
 const DECEL = 40; // m/s² beim Abbremsen
+const AIR_ACCEL = 14; // m/s² Steuerung in der Luft (Richtung Ziel)
 const MAX_JUMP_UP = 2.3; // so hoch kommt ein Sprung über die Füsse
 
 const DT = 1 / 60;
@@ -817,9 +818,19 @@ export class World {
       this.setTarget(b, pos);
       if (keep && keep.move === 'blocked') Object.assign(b, keep);
     }
+    ws.jumps ??= 0;
+    // Reflex: läuft er auf eine Kante zu und liegt das Ziel höher, springt er ab, statt hinunterzufallen
+    // (z. B. über eine schmale Lücke auf den nächsthöheren Block)
+    // Reflex: steht kurz voraus eine Stufe, die er im Sprung schafft, springt er im Lauf ab, statt erst anzustossen
+    if (b.grounded && b.move === 'moving' && ws.jumps < 3 && d > 1.2) {
+      const nx = (pos[0] - p.x) / d, nz = (pos[2] - p.z) / d;
+      if ((pos[1] > p.y - P_FOOT + 0.5 && this.edgeAhead(b, nx, nz)) || this.stepAhead(b, nx, nz)) {
+        this.jump(b.id);
+        ws.jumps++;
+      }
+    }
     if (b.move === 'blocked') {
       const h = b.block?.height_above_feet;
-      ws.jumps ??= 0;
       if (b.grounded && ws.jumps < 3 && (h === undefined || h <= MAX_JUMP_UP)) {
         this.jump(b.id);
         ws.jumps++;
@@ -1315,6 +1326,18 @@ export class World {
       else if (e <= step) { b.mv[0] = vx; b.mv[1] = vz; }
       else { b.mv[0] += (ex / e) * step; b.mv[1] += (ez / e) * step; }
       b.body.setLinvel({ x: b.mv[0], y: v.y, z: b.mv[1] }, true);
+    } else if (b.target && !arrived) {
+      // in der Luft weiter Richtung Ziel steuern (schwächer als am Boden): sonst springt er an einer
+      // Stufe senkrecht hoch und landet wieder davor, weil er an der Wand keine Vorwärtsfahrt hatte
+      b.mv[0] = v.x; b.mv[1] = v.z;
+      const ex = vx - v.x, ez = vz - v.z;
+      const e = Math.hypot(ex, ez);
+      const step = AIR_ACCEL * DT;
+      if (e > 1e-3) {
+        const k = Math.min(1, step / e);
+        b.mv[0] += ex * k; b.mv[1] += ez * k;
+        b.body.setLinvel({ x: b.mv[0], y: v.y, z: b.mv[1] }, true);
+      }
     } else {
       b.mv[0] = v.x; b.mv[1] = v.z;
     }
@@ -1339,6 +1362,34 @@ export class World {
       if (name) return { by: name, obstacle_top_y: r2(top), height_above_feet: r2(top - feet) };
     }
     return { by: null };
+  }
+
+  /** Fällt der Boden kurz vor dem Körper (in Laufrichtung) um mehr als eine halbe Einheit ab? */
+  private edgeAhead(b: Body, nx: number, nz: number): boolean {
+    const p = b.body.translation();
+    const feet = p.y - P_FOOT;
+    const ray = new RAPIER.Ray({ x: p.x + nx * 0.8, y: feet + 0.3, z: p.z + nz * 0.8 }, { x: 0, y: -1, z: 0 });
+    const hit = this.rw.castRay(ray, 0.9, true, undefined, undefined, undefined, b.body);
+    return !hit;
+  }
+
+  /** Steht knapp vor dem Körper eine feste Stufe (Level oder Objekt), die höher als ein Schritt, aber im Sprung machbar ist? */
+  private stepAhead(b: Body, nx: number, nz: number): boolean {
+    const v = b.body.linvel();
+    if (Math.hypot(v.x, v.z) < 2) return false; // nur im Lauf; aus dem Stand erledigt das der Reflex beim Anstossen
+    const p = b.body.translation();
+    const feet = p.y - P_FOOT;
+    const hit = this.rw.castRay(new RAPIER.Ray({ x: p.x, y: feet + 0.25, z: p.z }, { x: nx, y: 0, z: nz }), P_RAD + 0.7, true, undefined, undefined, undefined, b.body);
+    const handle = hit?.collider.parent()?.handle;
+    if (handle === undefined) return false;
+    let top: number | null = null;
+    const st = this.staticBodies.find((x) => x.handle === handle);
+    if (st) top = st.part.center[1] + st.part.size[1] / 2;
+    const o = this.objs.find((x) => x.body.handle === handle && !x.heldBy);
+    if (o) top = o.body.translation().y + o.size[1] / 2;
+    if (top === null) return false; // andere Körper überspringt er nicht
+    const h = top - feet;
+    return h > 0.3 && h <= MAX_JUMP_UP;
   }
 
   private groundBelow(b: Body): boolean {
