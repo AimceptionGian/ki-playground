@@ -126,7 +126,7 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 .note .link { flex: 1; min-width: 0; border: 0; padding: 0; text-align: left; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
 .note .x { border: 0; padding: 2px 5px; color: var(--dim); }
 .note .x:hover { color: var(--text); }
-.note p { margin: 6px 0 0; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 78%, transparent); mask-image: linear-gradient(#000 78%, transparent); }
+.note p { margin: 6px 0 0; padding-right: 4px; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(160, 190, 220, 0.4) transparent; }
 .note .life { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--accent); opacity: 0.6; transform-origin: left; animation: life 10s linear forwards; }
 .note:hover .life { animation: none; }
 @keyframes life { to { transform: scaleX(0); } }

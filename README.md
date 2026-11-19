@@ -140,3 +140,7 @@ Agent anklicken, das Panel öffnet sich.
 | `client/src/` | Weboberfläche (React) und 3D-Ansicht (Three.js) |
 
 Die Standardtexte für neue Agenten änderst du in `server/templates.ts`.
+
+## Lizenz
+
+[MIT](LICENSE). Die Lizenz gilt für den Code in diesem Repo, nicht für das Paper oder die Arbeit seiner Autoren.
