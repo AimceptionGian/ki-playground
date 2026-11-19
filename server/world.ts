@@ -39,6 +39,11 @@ interface Body {
   waits: number; // offene Wait-Aufrufe dieses Agenten
   lastAct: number; // Echtzeit der letzten Regung (0 = hat sich nie gemeldet)
   driven: boolean; // wird vom Server angetrieben (Runner läuft)
+  move: 'idle' | 'moving' | 'arrived' | 'blocked';
+  block: { by: string | null; obstacle_top_y?: number; height_above_feet?: number } | null;
+  bestD: number; // kleinster bisher erreichter Abstand zum Ziel
+  stuck: number; // Sekunden ohne Fortschritt am Boden
+  events: Record<string, unknown>[]; // was seit der letzten Beobachtung passiert ist
 }
 
 const DT = 1 / 60;
@@ -101,6 +106,7 @@ function asVec3(v: unknown, what: string): Vec3 {
 export class World {
   private rw!: RAPIER.World;
   private objs: Obj[] = [];
+  private staticBodies: { handle: number; part: StaticPart }[] = [];
   private bodies = new Map<string, Body>();
   private nextId = 1;
   private debt = 0;
@@ -136,6 +142,7 @@ export class World {
     this.rw.timestep = DT;
     for (const s of STATICS) {
       const b = this.rw.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(...s.center));
+      this.staticBodies.push({ handle: b.handle, part: s });
       this.rw.createCollider(
         RAPIER.ColliderDesc.cuboid(s.size[0] / 2, s.size[1] / 2, s.size[2] / 2).setFriction(0.8),
         b,
@@ -223,8 +230,8 @@ export class World {
     const body = this.rw.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...spawn).lockRotations().setCcdEnabled(true),
     );
-    this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false });
+    this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [] });
   }
 
   removeBody(id: string) {
@@ -280,6 +287,10 @@ export class World {
   moveTo(id: string, position: unknown) {
     const b = this.need(id);
     b.target = asVec3(position, 'position');
+    b.move = 'moving';
+    b.block = null;
+    b.bestD = Infinity;
+    b.stuck = 0;
     return { ok: true, target: b.target };
   }
 
@@ -295,6 +306,8 @@ export class World {
   stop(id: string) {
     const b = this.need(id);
     b.target = null;
+    b.move = 'idle';
+    b.block = null;
     return { ok: true };
   }
 
@@ -422,7 +435,10 @@ export class World {
       }
     }
     for (const b of this.bodies.values()) {
-      if (b.body.translation().y < -15) this.respawn(b);
+      if (b.body.translation().y < -15) {
+        this.respawn(b);
+        b.events.push({ time: r2(this.simTime), type: 'fell_off_world', respawned_at: b.spawn });
+      }
     }
 
     if (this.waiters.length) {
@@ -452,8 +468,24 @@ export class World {
       const d = Math.hypot(dx, dz);
       if (d < 0.15) {
         b.target = null;
+        b.move = 'arrived';
+        b.block = null;
         vx = 0; vz = 0;
       } else {
+        // Kommt der Körper am Boden nicht mehr näher, steht etwas im Weg. Das Ziel bleibt gesetzt,
+        // damit ein Sprung ihn weiter in dieselbe Richtung trägt.
+        if (d < b.bestD - 0.02) {
+          b.bestD = d;
+          b.stuck = 0;
+          if (b.move === 'blocked') { b.move = 'moving'; b.block = null; }
+        } else if (b.grounded) {
+          b.stuck += DT;
+          if (b.stuck > 0.5 && b.move !== 'blocked') {
+            b.move = 'blocked';
+            b.block = this.obstacleAhead(b, dx / d, dz / d);
+            b.events.push({ time: r2(this.simTime), type: 'blocked', ...b.block });
+          }
+        }
         const s = Math.min(WALK_SPEED, d / DT);
         vx = (dx / d) * s;
         vz = (dz / d) * s;
@@ -461,6 +493,27 @@ export class World {
       }
     }
     b.body.setLinvel({ x: vx, y: v.y, z: vz }, true);
+  }
+
+  /** Was steht in Laufrichtung direkt vor dem Körper? */
+  private obstacleAhead(b: Body, nx: number, nz: number): Body['block'] {
+    const p = b.body.translation();
+    const feet = p.y - P_FOOT;
+    for (const h of [feet + 0.25, p.y, p.y + P_FOOT - 0.1]) {
+      const hit = this.rw.castRay(new RAPIER.Ray({ x: p.x, y: h, z: p.z }, { x: nx, y: 0, z: nz }), 1.6, true, undefined, undefined, undefined, b.body);
+      const handle = hit?.collider.parent()?.handle;
+      if (handle === undefined) continue;
+      const st = this.staticBodies.find((x) => x.handle === handle);
+      let name: string | null = null;
+      let top = 0;
+      if (st) { name = st.part.name; top = st.part.center[1] + st.part.size[1] / 2; }
+      const o = this.objs.find((x) => x.body.handle === handle);
+      if (o) { name = o.name; top = o.body.translation().y + o.size[1] / 2; }
+      const other = [...this.bodies.values()].find((x) => x.body.handle === handle);
+      if (other) { name = other.name; top = other.body.translation().y + P_FOOT; }
+      if (name) return { by: name, obstacle_top_y: r2(top), height_above_feet: r2(top - feet) };
+    }
+    return { by: null };
   }
 
   private groundBelow(b: Body): boolean {
@@ -476,6 +529,8 @@ export class World {
 
   private respawn(b: Body) {
     b.target = null;
+    b.move = 'idle';
+    b.block = null;
     b.body.setTranslation({ x: b.spawn[0], y: b.spawn[1], z: b.spawn[2] }, true);
     b.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
   }
@@ -499,6 +554,7 @@ export class World {
     for (const b of this.bodies.values()) {
       b.holding = null;
       this.respawn(b);
+      b.events.push({ time: r2(this.simTime), type: 'world_reset' });
     }
     for (const o of this.objs) this.rw.removeRigidBody(o.body);
     this.objs = [];
@@ -585,7 +641,9 @@ export class World {
         grounded: b.grounded,
         holding: b.holding?.name ?? null,
         move_target: b.target,
+        move: { status: b.move, ...(b.target ? { target: b.target } : {}), ...(b.block || {}) },
       },
+      events: b.events.splice(0),
       chat: this.chat.slice(-10),
       entities,
     };

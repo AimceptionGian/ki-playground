@@ -69,7 +69,7 @@ export async function runTool(world: World, store: AgentStore, agent: Agent, nam
     }
     world.touch(agent.id);
     const o = world.observe(agent.id);
-    return { result, time: o.time, self: o.self };
+    return { result, time: o.time, self: o.self, ...(o.events.length ? { events: o.events } : {}) };
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
   }

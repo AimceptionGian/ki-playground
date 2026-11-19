@@ -52,7 +52,11 @@ Jede Anfrage braucht den Header \`Authorization: Bearer ${token}\`.
 \`GET /api/agent/observe\`
 
 Liefert ein JSON-Objekt mit \`time\` (Sekunden Weltzeit), \`self\` (dein Körper),
-\`chat\` (letzte Nachrichten) und \`entities\` (Name, Position, Grösse, Form, Farbe von allem in der Welt).
+\`chat\` (letzte Nachrichten), \`events\` und \`entities\` (Name, Position, Grösse, Form, Farbe von allem in der Welt).
+
+\`self.move.status\` sagt, wie es um deine Bewegung steht: \`idle\`, \`moving\`, \`arrived\` oder \`blocked\`.
+Bei \`blocked\` steht dabei, was im Weg ist (\`by\`) und wie hoch es über deine Füsse ragt (\`height_above_feet\`).
+\`events\` listet, was dir seit dem letzten Blick widerfahren ist.
 
 \`\`\`bash
 curl -s ${baseUrl}/api/agent/observe -H "Authorization: Bearer ${token}"
