@@ -46,6 +46,7 @@ store.onLog = (id, entry) => broadcast({ t: 'log', id, entry });
 store.onNote = (id, path, text, isNew) => broadcast({ t: 'note', id, path, text, isNew });
 setInterval(() => store.scan(), 1000);
 runners.onChange = () => broadcast({ t: 'agents' });
+store.onUsage = (id, usage) => broadcast({ t: 'usage', id, usage });
 world.onReset = () => broadcast({ t: 'reset' });
 
 let last = performance.now();
@@ -61,7 +62,7 @@ setInterval(() => {
 
 // ---------- Steuerung (Weboberfläche) ----------
 
-const pub = (a: Agent) => ({ ...a, apiKey: undefined, hasKey: !!a.apiKey, running: runners.isRunning(a.id) });
+const pub = (a: Agent) => ({ ...a, apiKey: undefined, hasKey: !!a.apiKey, running: runners.isRunning(a.id), usage: store.getUsage(a.id) });
 const wrap = (fn: (req: express.Request, res: express.Response) => unknown) => async (req: express.Request, res: express.Response) => {
   try {
     const out = await fn(req, res);
@@ -192,7 +193,7 @@ app.use(vite.middlewares);
 
 // Beim Beenden keine Agenten-Prozesse zurücklassen, die weiter Kontingent verbrauchen
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-  process.on(sig, () => { runners.stopAll(); process.exit(0); });
+  process.on(sig, () => { runners.stopAll(); store.saveUsage(); process.exit(0); });
 }
 
 server.listen(PORT, '127.0.0.1', () => console.log(`KI Playground läuft auf ${BASE}`));

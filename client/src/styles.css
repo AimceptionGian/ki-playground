@@ -146,3 +146,5 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 .stem { position: absolute; left: 50%; top: calc(100% - 3px); width: 2px; margin-left: -1px; background: linear-gradient(rgba(238, 243, 248, 0.95), rgba(238, 243, 248, 0.35)); border-radius: 1px; }
 
 .num select { width: 112px; padding: 4px 6px; font: 12px var(--sans); }
+
+.agents small.usage { font: 10.5px var(--mono); color: #9db3c9; font-variant-numeric: tabular-nums; margin-top: 2px; cursor: help; }

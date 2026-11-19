@@ -98,7 +98,12 @@ export class Runners {
             body: JSON.stringify({ model: agent.model, messages, tools }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${clip(await res.text(), 400)}`);
-          const msg = ((await res.json()) as any).choices?.[0]?.message;
+          const data = (await res.json()) as any;
+          if (data.usage) {
+            const cached = data.usage.prompt_tokens_details?.cached_tokens || 0;
+            store.addUsage(agent.id, { input: (data.usage.prompt_tokens || 0) - cached, cacheRead: cached, output: data.usage.completion_tokens || 0 });
+          }
+          const msg = data.choices?.[0]?.message;
           if (!msg) throw new Error('Antwort ohne Nachricht');
           errors = 0;
           messages.push({ role: 'assistant', content: msg.content ?? '', ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls } : {}) });
@@ -155,7 +160,7 @@ export class Runners {
       new Promise<number>((resolve) => {
         const args = [
           '-p', prompt,
-          '--output-format', 'stream-json', '--verbose',
+          '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
           '--permission-mode', 'acceptEdits',
           '--allowedTools', 'Bash(curl:*),Read,Write,Edit,Glob,Grep',
           '--strict-mcp-config',
@@ -168,9 +173,35 @@ export class Runners {
         delete env.CLAUDE_CODE_ENTRYPOINT;
         proc = spawn('claude', args, { cwd: store.dir(agent), env, stdio: ['ignore', 'pipe', 'pipe'] });
         stopped = false;
+        // Verbrauch: laufend aus den einzelnen Antworten, am Ende mit der Abrechnung des Laufs abgeglichen
+        const fields = ['input', 'cacheRead', 'cacheWrite', 'output'] as const;
+        const read = (u: any) => ({ input: u?.input_tokens || 0, cacheRead: u?.cache_read_input_tokens || 0, cacheWrite: u?.cache_creation_input_tokens || 0, output: u?.output_tokens || 0 });
+        const perMsg = new Map<string, ReturnType<typeof read>>();
+        const live = read(null);
+        let curMsg = '';
+        const count = (now: ReturnType<typeof read>, before: ReturnType<typeof read>) => {
+          const d: Record<string, number> = {};
+          for (const k of fields) { d[k] = now[k] - before[k]; live[k] += d[k]; }
+          return d;
+        };
         readline.createInterface({ input: proc.stdout! }).on('line', (line) => {
           let ev: any;
           try { ev = JSON.parse(line); } catch { return; }
+          // message_start nennt die Eingabe, message_delta die endgültige Ausgabe einer Antwort
+          const se = ev.type === 'stream_event' ? ev.event : null;
+          if (se?.type === 'message_start') curMsg = se.message?.id || '';
+          const u = se?.type === 'message_start' ? se.message?.usage : se?.type === 'message_delta' ? se.usage : ev.type === 'assistant' ? ev.message?.usage : null;
+          const mid = se ? curMsg : ev.message?.id;
+          if (u && mid) {
+            const before = perMsg.get(mid) || read(null);
+            const got = read(u);
+            const now = { ...before };
+            for (const k of fields) now[k] = Math.max(before[k], got[k]);
+            store.addUsage(agent.id, count(now, before));
+            perMsg.set(mid, now);
+          } else if (ev.type === 'result' && ev.usage) {
+            store.addUsage(agent.id, { ...count(read(ev.usage), { ...live }), cost: Number(ev.total_cost_usd) || 0 });
+          }
           const content = ev.message?.content;
           if (ev.type === 'assistant' && Array.isArray(content)) {
             for (const c of content) {

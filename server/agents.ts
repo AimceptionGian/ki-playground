@@ -19,6 +19,15 @@ export interface Agent {
   sessionMinutes: number; // Weltzeit, nach der der Kontext geleert wird
 }
 
+/** Summierter Tokenverbrauch eines Agenten über alle Sitzungen. */
+export interface Usage {
+  input: number; // neu gelesene Eingabe-Tokens
+  cacheRead: number; // Eingabe aus dem Cache (deutlich günstiger)
+  cacheWrite: number; // Eingabe, die in den Cache geschrieben wurde
+  output: number;
+  cost: number; // USD, soweit der Harness sie meldet
+}
+
 export interface LogEntry {
   wall: number;
   time: number;
@@ -31,11 +40,15 @@ const ROOT = DATA_ROOT;
 const FILE = path.join(ROOT, 'agents.json');
 const WS = path.join(ROOT, 'workspaces');
 const LOGS = path.join(ROOT, 'logs');
+const USAGE = path.join(ROOT, 'usage.json');
 
 export class AgentStore {
   agents: Agent[] = [];
   private logs = new Map<string, LogEntry[]>();
   onLog: ((id: string, e: LogEntry) => void) | null = null;
+  onUsage: ((id: string, u: Usage) => void) | null = null;
+  private usage = new Map<string, Usage>();
+  private usageTimer: NodeJS.Timeout | null = null;
   /** Meldet, was ein Agent gerade in eine seiner Dateien geschrieben hat. */
   onNote: ((id: string, path: string, text: string, isNew: boolean) => void) | null = null;
   private seen = new Map<string, Map<string, { mtime: number; content: string }>>();
@@ -44,6 +57,7 @@ export class AgentStore {
     fs.mkdirSync(WS, { recursive: true });
     fs.mkdirSync(LOGS, { recursive: true });
     if (fs.existsSync(FILE)) this.agents = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    try { this.usage = new Map(Object.entries(JSON.parse(fs.readFileSync(USAGE, 'utf8')))); } catch { /* noch kein Verbrauch */ }
     for (const a of this.agents) this.ensureWorkspace(a);
   }
 
@@ -186,6 +200,24 @@ export class AgentStore {
     const f = this.safe(a, rel);
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.appendFileSync(f, content.endsWith('\n') ? content : content + '\n');
+  }
+
+  // ---------- Verbrauch ----------
+
+  getUsage(id: string): Usage | null {
+    return this.usage.get(id) || null;
+  }
+
+  addUsage(id: string, d: Partial<Usage>) {
+    const u = this.usage.get(id) || { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0 };
+    for (const k of Object.keys(u) as (keyof Usage)[]) u[k] = Math.max(0, u[k] + (Number(d[k]) || 0));
+    this.usage.set(id, u);
+    this.onUsage?.(id, u);
+    this.usageTimer ??= setTimeout(() => { this.usageTimer = null; this.saveUsage(); }, 2000);
+  }
+
+  saveUsage() {
+    fs.writeFileSync(USAGE, JSON.stringify(Object.fromEntries(this.usage), null, 2));
   }
 
   // ---------- Protokoll ----------

@@ -9,7 +9,9 @@ export interface AgentInfo {
   baseUrl: string; model: string; hasKey: boolean;
   beginPrompt: string; continuePrompt: string; sessionMinutes: number;
   running: boolean;
+  usage: Usage | null;
 }
+export interface Usage { input: number; cacheRead: number; cacheWrite: number; output: number; cost: number }
 export interface LogEntry { wall: number; time: number; kind: string; text: string }
 
 export async function api<T = any>(path: string, method = 'GET', body?: unknown): Promise<T> {
@@ -22,6 +24,22 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
 export const RUNNER_LABEL = { extern: 'Extern (API / MCP)', api: 'Modell über Endpunkt', claude: 'Claude Code' } as const;
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
 const COLORS = ['#b6e23a', '#ff8a5c', '#5cc8ff', '#f4d35e', '#d78bff', '#ff6f91'];
+
+const short = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 1 : 2) + 'M' : n >= 1000 ? (n / 1000).toFixed(n >= 1e5 ? 0 : 1) + 'k' : String(n));
+const full = (n: number) => n.toLocaleString('de-CH');
+
+function UsageLine({ u }: { u: Usage }) {
+  const read = u.input + u.cacheRead + u.cacheWrite;
+  const tip = [
+    `Gelesen: ${full(read)} Tokens`,
+    `  davon neu: ${full(u.input)}`,
+    `  aus dem Cache: ${full(u.cacheRead)}`,
+    `  in den Cache geschrieben: ${full(u.cacheWrite)}`,
+    `Geschrieben: ${full(u.output)} Tokens`,
+    u.cost > 0 ? `Kosten laut Claude Code: ${u.cost.toFixed(2)} USD (abgeschlossene Läufe)` : '',
+  ].filter(Boolean).join('\n');
+  return <small className="usage" title={tip}>{short(read)} ein · {short(u.output)} aus</small>;
+}
 
 function clock(s: number) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
@@ -75,6 +93,7 @@ export function App() {
           if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn }); }
         } else if (m.t === 'agents') load().catch(() => {});
         else if (m.t === 'log') logSubs.current.forEach((f) => f(m.id, m.entry));
+        else if (m.t === 'usage') setAgents((list) => list.map((a) => (a.id === m.id ? { ...a, usage: m.usage } : a)));
         else if (m.t === 'note') noteSubs.current.forEach((f) => f(m));
       };
     };
@@ -114,6 +133,7 @@ export function App() {
               <div>
                 <b>{a.name}</b>
                 <small>{RUNNER_LABEL[a.runner]}{a.model ? ` · ${a.model}` : ''}</small>
+                {a.usage && <UsageLine u={a.usage} />}
               </div>
               {a.runner !== 'extern' && <em className={a.running ? 'live' : ''}>{a.running ? 'aktiv' : 'aus'}</em>}
             </li>
