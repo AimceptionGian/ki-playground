@@ -21,7 +21,7 @@ body { background: var(--bg); color: var(--text); font: 13px/1.45 var(--sans); o
 .dim { color: var(--dim); }
 
 .panel { position: absolute; top: 56px; bottom: 96px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(10px); display: flex; flex-direction: column; min-height: 0; }
-.panel.left { left: 16px; width: 270px; bottom: auto; max-height: calc(100% - 152px); padding-bottom: 8px; }
+.panel.left { left: 16px; width: 330px; bottom: auto; max-height: calc(100% - 152px); padding-bottom: 8px; }
 .panel.right { right: 16px; width: min(520px, calc(100% - 320px)); }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 10px; }
 h2 { margin: 0; font: 600 11px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
@@ -147,4 +147,4 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 
 .num select { width: 112px; padding: 4px 6px; font: 12px var(--sans); }
 
-.agents small.usage { font: 10.5px var(--mono); color: #9db3c9; font-variant-numeric: tabular-nums; margin-top: 2px; cursor: help; }
+.agents small.usage { font: 10.5px var(--mono); color: #9db3c9; font-variant-numeric: tabular-nums; margin-top: 2px; cursor: help; white-space: normal; }

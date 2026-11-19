@@ -31,14 +31,14 @@ const full = (n: number) => n.toLocaleString('de-CH');
 function UsageLine({ u }: { u: Usage }) {
   const read = u.input + u.cacheRead + u.cacheWrite;
   const tip = [
-    `Gelesen: ${full(read)} Tokens`,
-    `  davon neu: ${full(u.input)}`,
-    `  aus dem Cache: ${full(u.cacheRead)}`,
-    `  in den Cache geschrieben: ${full(u.cacheWrite)}`,
-    `Geschrieben: ${full(u.output)} Tokens`,
+    `neu: ${full(u.input + u.cacheWrite)} Tokens – erstmals vom Modell gelesen`,
+    `  davon in den Cache geschrieben: ${full(u.cacheWrite)}`,
+    `Cache: ${full(u.cacheRead)} Tokens – bereits bekannter Kontext, bei jeder Anfrage erneut mitgeschickt (rund ein Zehntel des Preises)`,
+    `aus: ${full(u.output)} Tokens – vom Modell geschrieben`,
+    `Summe gelesen: ${full(read)} Tokens`,
     u.cost > 0 ? `Kosten laut Claude Code: ${u.cost.toFixed(2)} USD (abgeschlossene Läufe)` : '',
   ].filter(Boolean).join('\n');
-  return <small className="usage" title={tip}>{short(read)} ein · {short(u.output)} aus</small>;
+  return <small className="usage" title={tip}>{short(u.input + u.cacheWrite)} neu · {short(u.cacheRead)} Cache · {short(u.output)} aus</small>;
 }
 
 function clock(s: number) {
