@@ -50,6 +50,26 @@ interface Body {
   auto: boolean; // schlendert im Leerlauf von selbst
   idle: number; // Sekunden ohne Plan
   nextLook: number; // Weltzeit, zu der er sich im Leerlauf wieder umschaut
+  needs: Needs;
+  urgent: { hunger: boolean; thirst: boolean }; // schon als dringend gemeldet
+  cheer: number; // kurzer Freudenschub durch Reden und Spielen, klingt ab
+  autoCool: number; // Weltzeit, vor der der Körper keinen neuen Eigenplan startet
+  exhausted: boolean;
+}
+
+export interface Needs { hunger: number; thirst: number; boredom: number; joy: number; health: number }
+
+/** Beerenbusch oder Teich: ortsfeste Quelle für Nahrung und Wasser. */
+interface Source {
+  id: number;
+  name: string;
+  kind: 'bush' | 'pond';
+  pos: Vec3;
+  radius: number; // Teich: Radius, Busch: Grösse
+  berries: number;
+  max: number;
+  regrow: number; // Sekunden bis zur nächsten Beere (ohne Härte)
+  timer: number;
 }
 
 /** Ein Schritt eines Plans. Welche Felder zählen, hängt vom Typ ab (siehe STEP_TYPES). */
@@ -73,12 +93,22 @@ interface Plan {
   steps: Step[];
   idx: number;
   status: 'running' | 'done' | 'failed' | 'cancelled';
+  auto?: boolean; // vom Körper selbst gewählt (Leerlauf), nicht vom Geist
   error?: string;
   sub: Record<string, any>; // Zustand des laufenden Schritts
 }
 
-export const STEP_TYPES = ['goto', 'follow', 'pickup', 'place', 'throw', 'jump', 'say', 'look', 'wait', 'wander'] as const;
+export const STEP_TYPES = ['goto', 'follow', 'pickup', 'place', 'throw', 'jump', 'say', 'look', 'wait', 'wander', 'eat', 'drink'] as const;
 const MAX_STEPS = 20;
+// Bedürfnisse: Anstieg pro Sekunde Weltzeit (bei Härte 1)
+const HUNGER_RATE = 1 / 600;
+const THIRST_RATE = 1 / 360;
+const BORED_RATE = 1 / 300;
+const URGENT = 0.8;
+const BERRY_FOOD = 0.3; // so viel Hunger stillt eine Beere
+const EAT_EVERY = 0.8; // Sekunden pro Beere
+const DRINK_RATE = 0.4; // Durst, der pro Sekunde sinkt
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 const TURN_SPEED = 9; // rad/s
 const MAX_JUMP_UP = 2.3; // so hoch kommt ein Sprung über die Füsse
 
@@ -154,6 +184,7 @@ export class World {
   private runWaiters: (() => void)[] = [];
   private rockCooldown = 0;
   private lastReset = 0;
+  private sources: Source[] = [];
 
   simTime = 0;
   paused = true;
@@ -164,6 +195,8 @@ export class World {
   /** Wartemodus: Die Zeit läuft nur, solange alle beteiligten Agenten in einem Wait stehen. */
   /** Wie weit Gesprochenes zu hören ist, in Einheiten. 0 = überall. */
   hearRange = 30;
+  /** Härte der Welt: schnellerer Hunger und Durst, langsameres Nachwachsen der Nahrung. */
+  hardness = 1;
   lockstep = false;
   /** Überlegt ein Agent länger als so viele Sekunden (Echtzeit), läuft die Welt ohne ihn weiter. */
   thinkTimeout = 60;
@@ -192,6 +225,14 @@ export class World {
       );
     }
     this.spawnObjects();
+    this.spawnSources();
+  }
+
+  private spawnSources() {
+    this.sources = [];
+    const bush = (pos: Vec3) => this.sources.push({ id: this.nextId++, name: `Bush_${this.sources.length + 1}`, kind: 'bush', pos, radius: 1, berries: 5, max: 5, regrow: 45, timer: 0 });
+    bush([-14, 0, 22]); bush([20, 0, 16]); bush([-30, 0, 14]); bush([30, 0, 26]); bush([-4, 0, -26]);
+    this.sources.push({ id: this.nextId++, name: 'Pond_1', kind: 'pond', pos: [12, 0, -26], radius: 3.2, berries: 0, max: 0, regrow: 0, timer: 0 });
   }
 
   private spawnObjects() {
@@ -274,7 +315,7 @@ export class World {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...spawn).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0 });
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1 }, urgent: { hunger: false, thirst: false }, cheer: 0, autoCool: 0, exhausted: false });
   }
 
   removeBody(id: string) {
@@ -314,7 +355,7 @@ export class World {
   /** wait = steht in einem Wait · think = überlegt, die Welt wartet auf ihn · away = zu lange still, zählt nicht mit */
   private stateOf(b: Body, now: number): 'wait' | 'think' | 'away' | null {
     // solange der Körper einen Plan abarbeitet, hält der Geist die Welt nicht auf
-    if (b.waits > 0 || b.plan?.status === 'running') return 'wait';
+    if (b.waits > 0 || (b.plan?.status === 'running' && !b.plan.auto)) return 'wait';
     if (b.lastAct === 0) return b.driven ? 'think' : null;
     return now - b.lastAct < this.thinkTimeout * 1000 ? 'think' : b.driven || now - b.lastAct < 600_000 ? 'away' : null;
   }
@@ -349,6 +390,7 @@ export class World {
     const b = this.need(id);
     if (b.plan?.status === 'running') b.plan.status = 'cancelled';
     b.auto = false;
+    b.autoCool = this.simTime + 20;
     b.target = null;
     b.move = 'idle';
     b.block = null;
@@ -426,6 +468,7 @@ export class World {
     this.chat.push(msg);
     if (this.chat.length > 50) this.chat.shift();
     b.heard.push(msg);
+    this.social(b);
     const p = b.body.translation();
     const heardBy: string[] = [];
     for (const o of this.bodies.values()) {
@@ -437,6 +480,7 @@ export class World {
       if (o.heard.length > 30) o.heard.shift();
       o.events.push({ time: msg.time, type: 'heard', from: b.name, text: t, distance: r2(dist) });
       heardBy.push(o.name);
+      this.social(o);
       this.interruptWaits(o, 'speech');
     }
     if (b.heard.length > 30) b.heard.shift();
@@ -483,6 +527,8 @@ export class World {
       if (type === 'throw') need(!!(out.direction || out.at || out.position), 'direction, at oder position');
       if (type === 'say') need(!!out.text, 'text');
       if (type === 'wait') need(out.seconds !== undefined, 'seconds');
+      if (type === 'eat' && out.name && !this.sources.some((x) => x.kind === 'bush' && x.name.toLowerCase() === out.name!.toLowerCase())) throw new Error(`${at} (eat): "${out.name}" ist kein Beerenbusch.`);
+      if (type === 'drink' && out.name && !this.sources.some((x) => x.kind === 'pond' && x.name.toLowerCase() === out.name!.toLowerCase())) throw new Error(`${at} (drink): "${out.name}" ist kein Teich.`);
       return out;
     });
   }
@@ -492,7 +538,7 @@ export class World {
     const b = this.need(id);
     const steps = this.checkSteps(data?.steps);
     const intent = String(data?.intent ?? '').slice(0, 200);
-    if (data?.append && b.plan?.status === 'running') {
+    if (data?.append && b.plan?.status === 'running' && !b.plan.auto) {
       if (b.plan.steps.length - b.plan.idx + steps.length > MAX_STEPS) throw new Error(`Höchstens ${MAX_STEPS} offene Schritte.`);
       b.plan.steps.push(...steps);
       if (intent) b.plan.intent = intent;
@@ -518,7 +564,7 @@ export class World {
     if (!p) return null;
     const cur = p.steps[Math.min(p.idx, p.steps.length - 1)];
     return {
-      id: p.id, intent: p.intent, status: p.status,
+      id: p.id, intent: p.intent, status: p.status, ...(p.auto ? { auto: true } : {}),
       step: Math.min(p.idx + 1, p.steps.length), of: p.steps.length,
       current: this.describe(cur),
       ...(p.error ? { error: p.error } : {}),
@@ -532,6 +578,7 @@ export class World {
     b.target = null;
     if (b.move === 'moving' || b.move === 'blocked') b.move = 'idle';
     b.idle = 0;
+    if (p.auto) { b.autoCool = this.simTime + (status === 'failed' ? 15 : 3); return; }
     // im Wartemodus ist der Agent ab jetzt wieder am Zug: den laufenden Zeitschub hier beenden
     this.released = true;
     b.events.push({ time: r2(this.simTime), type: status === 'done' ? 'plan_done' : 'plan_failed', plan_id: p.id, intent: p.intent, ...(error ? { step: p.idx + 1, error } : {}) });
@@ -563,6 +610,8 @@ export class World {
       const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;
       return v3((holder ?? o).body.translation());
     }
+    const src = this.sources.find((x) => x.name.toLowerCase() === n);
+    if (src) return src.pos;
     const other = [...this.bodies.values()].find((x) => x.name.toLowerCase() === n);
     if (other) return v3(other.body.translation());
     const st = STATICS.find((x) => x.name.toLowerCase() === n);
@@ -696,6 +745,51 @@ export class World {
         this.lookAt(b, pos);
         return 'done';
       }
+      case 'eat': {
+        // der Busch wird einmal gewählt und dann beibehalten
+        st.src ??= (s.name ? this.sources.find((x) => x.name.toLowerCase() === s.name!.toLowerCase()) : this.nearestSource(b, 'bush', true))?.id;
+        const src: Source | undefined = this.sources.find((x) => x.id === st.src);
+        if (!src) return { fail: s.name ? `"${s.name}" gibt es nicht.` : 'Kein Beerenbusch mit Beeren zu finden.' };
+        if (!st.eating) {
+          if (src.berries <= 0) return { fail: `${src.name} hat keine Beeren mehr.` };
+          const p = b.body.translation();
+          if (Math.hypot(src.pos[0] - p.x, src.pos[2] - p.z) > 2.2) {
+            st.ws ??= {};
+            const w = this.walkTo(b, st.ws, src.pos, 1.6);
+            if (w !== 'done') return w;
+          }
+          st.eating = true; st.next = this.simTime; st.n = 0;
+          b.target = null;
+          this.lookAt(b, src.pos);
+        }
+        if (this.simTime >= st.next) {
+          if (src.berries <= 0) return st.n > 0 ? 'done' : { fail: `${src.name} hat keine Beeren mehr.` };
+          src.berries--;
+          st.n++;
+          b.needs.hunger = clamp01(b.needs.hunger - BERRY_FOOD);
+          b.cheer = Math.min(1, b.cheer + 0.05);
+          st.next = this.simTime + EAT_EVERY;
+          if (b.needs.hunger <= 0.1) return 'done';
+        }
+        return 'running';
+      }
+      case 'drink': {
+        const src = s.name ? this.sources.find((x) => x.name.toLowerCase() === s.name!.toLowerCase()) : this.nearestSource(b, 'pond', false);
+        if (!src) return { fail: s.name ? `"${s.name}" gibt es nicht.` : 'Kein Teich zu finden.' };
+        if (!st.drinking) {
+          const p = b.body.translation();
+          if (Math.hypot(src.pos[0] - p.x, src.pos[2] - p.z) > src.radius + 1.2) {
+            st.ws ??= {};
+            const w = this.walkTo(b, st.ws, src.pos, src.radius + 0.8);
+            if (w !== 'done') return w;
+          }
+          st.drinking = true;
+          b.target = null;
+          this.lookAt(b, src.pos);
+        }
+        b.needs.thirst = clamp01(b.needs.thirst - DRINK_RATE * DT);
+        return b.needs.thirst <= 0.03 ? 'done' : 'running';
+      }
       case 'wait':
         return elapsed >= Math.min(60, s.seconds!) ? 'done' : 'running';
       case 'wander': {
@@ -719,6 +813,84 @@ export class World {
     return { fail: `Unbekannter Schritt: ${s.type}` };
   }
 
+  private nearestSource(b: Body, kind: Source['kind'], needBerries: boolean): Source | undefined {
+    const p = b.body.translation();
+    let best: Source | undefined;
+    let bd = Infinity;
+    for (const x of this.sources) {
+      if (x.kind !== kind || (needBerries && x.berries <= 0)) continue;
+      const d = Math.hypot(x.pos[0] - p.x, x.pos[2] - p.z);
+      if (d < bd) { bd = d; best = x; }
+    }
+    return best;
+  }
+
+  /** Reden und Zuhören vertreiben Langeweile und machen froh. */
+  private social(b: Body) {
+    b.needs.boredom = clamp01(b.needs.boredom - 0.12);
+    b.cheer = Math.min(1, b.cheer + 0.15);
+  }
+
+  /** Wörter für den Geist: eine Zahl von 0 bis 1 allein sagt wenig. */
+  private word(kind: 'hunger' | 'thirst' | 'boredom' | 'joy' | 'health', v: number): string {
+    const scale: Record<string, string[]> = {
+      hunger: ['satt', 'nicht hungrig', 'etwas hungrig', 'hungrig', 'sehr hungrig', 'am Verhungern'],
+      thirst: ['nicht durstig', 'kaum durstig', 'etwas durstig', 'durstig', 'sehr durstig', 'am Verdursten'],
+      boredom: ['angeregt', 'beschäftigt', 'etwas gelangweilt', 'gelangweilt', 'sehr gelangweilt', 'verzweifelt gelangweilt'],
+      joy: ['niedergeschlagen', 'bedrückt', 'gedämpft', 'zufrieden', 'froh', 'überglücklich'],
+      // Gesundheit: 1 = gesund, daher umgekehrt gelesen
+      health: ['dem Tod nah', 'schwer angeschlagen', 'angeschlagen', 'leicht angeschlagen', 'gesund', 'kerngesund'],
+    };
+    return scale[kind][Math.min(5, Math.floor(v * 5.99))];
+  }
+
+  private needsInfo(b: Body) {
+    const out: Record<string, { value: number; word: string }> = {};
+    for (const k of ['hunger', 'thirst', 'boredom', 'joy', 'health'] as const) out[k] = { value: r2(b.needs[k]), word: this.word(k, b.needs[k]) };
+    return out;
+  }
+
+  /** Bedürfnisse laufen mit der Weltzeit: Hunger und Durst steigen, Langeweile bei Stillstand, Gesundheit leidet. */
+  private tickNeeds(b: Body) {
+    const n = b.needs;
+    const hard = this.hardness;
+    const v = b.body.linvel();
+    const walking = b.grounded && Math.hypot(v.x, v.z) > 0.5;
+    n.hunger = clamp01(n.hunger + HUNGER_RATE * hard * (walking ? 1.5 : 1) * DT);
+    n.thirst = clamp01(n.thirst + THIRST_RATE * hard * (walking ? 1.3 : 1) * DT);
+    // Langeweile sinkt, wenn man sich bewegt (Neues sieht), steigt sonst
+    n.boredom = clamp01(n.boredom + (walking ? -BORED_RATE * 1.2 : BORED_RATE) * DT);
+    b.cheer = Math.max(0, b.cheer - DT / 60);
+    const target = clamp01(0.85 - 0.5 * n.hunger - 0.5 * n.thirst - 0.4 * n.boredom + b.cheer * 0.4);
+    n.joy = clamp01(n.joy + (target - n.joy) * Math.min(1, DT * 0.1));
+    if (n.boredom >= 1) n.joy = Math.max(0, n.joy - 0.1 * DT);
+    let dmg = 0;
+    if (n.hunger >= 1) dmg += 0.01;
+    if (n.thirst >= 1) dmg += 0.02;
+    if (dmg) n.health = clamp01(n.health - dmg * DT);
+    else if (n.hunger < 0.7 && n.thirst < 0.7) n.health = clamp01(n.health + 0.005 * DT);
+    for (const k of ['hunger', 'thirst'] as const) {
+      if (!b.urgent[k] && n[k] >= URGENT) {
+        b.urgent[k] = true;
+        b.events.push({ time: r2(this.simTime), type: 'need_urgent', need: k, word: this.word(k, n[k]) });
+        this.interruptWaits(b, 'need_urgent');
+      } else if (b.urgent[k] && n[k] < 0.6) b.urgent[k] = false;
+    }
+    if (n.health <= 0 && !b.exhausted) {
+      // Der Tod folgt mit dem Lebenszyklus (Schritt 3); bis dahin nur eine Meldung
+      b.exhausted = true;
+      b.events.push({ time: r2(this.simTime), type: 'health_zero' });
+    } else if (n.health > 0.2) b.exhausted = false;
+  }
+
+  private tickSources() {
+    for (const s of this.sources) {
+      if (s.kind !== 'bush' || s.berries >= s.max) { s.timer = 0; continue; }
+      s.timer += DT;
+      if (s.timer >= s.regrow * this.hardness) { s.berries++; s.timer = 0; }
+    }
+  }
+
   /** Liegt bei (x, z) Boden auf etwa gleicher Höhe wie die Füsse – und auf dem Weg dorthin keine Kante? */
   private safeGround(b: Body, x: number, z: number): boolean {
     const p = b.body.translation();
@@ -740,6 +912,20 @@ export class World {
   /** Ohne Plan steht der Körper nicht steif da: er schaut sich um und schlendert ab und zu. */
   private idleBody(b: Body) {
     b.idle += DT;
+    if (this.simTime >= b.autoCool && !b.auto && !b.target) {
+      const n = b.needs;
+      let steps: Step[] | null = null;
+      let why = '';
+      if (n.thirst >= 0.55 && n.thirst >= n.hunger && this.nearestSource(b, 'pond', false)) { steps = [{ type: 'drink' }]; why = 'trinken'; }
+      else if (n.hunger >= 0.55 && this.nearestSource(b, 'bush', true)) { steps = [{ type: 'eat' }]; why = 'essen'; }
+      else if (n.boredom >= 0.7) { steps = [{ type: 'wander', radius: 12, seconds: 15 }]; why = 'umherschlendern'; }
+      if (steps) {
+        b.plan = { id: this.nextPlanId++, intent: `(von selbst) ${why}`, steps, idx: 0, status: 'running', auto: true, sub: {} };
+        b.autoCool = this.simTime + 3;
+        this.advance(b);
+        return;
+      }
+    }
     if (b.auto) {
       if (!b.target || b.move === 'blocked') { b.auto = false; b.target = null; b.move = 'idle'; }
       return;
@@ -799,6 +985,7 @@ export class World {
 
   private step() {
     for (const b of this.bodies.values()) {
+      this.tickNeeds(b);
       if (b.plan?.status === 'running') this.advance(b);
       else this.idleBody(b);
       this.driveBody(b);
@@ -807,6 +994,7 @@ export class World {
     this.rw.step();
     this.simTime += DT;
     this.rockCooldown -= DT;
+    this.tickSources();
 
     for (const o of this.objs) {
       if (o.heldBy || o.lost) continue;
@@ -956,6 +1144,7 @@ export class World {
     for (const o of this.objs) this.rw.removeRigidBody(o.body);
     this.objs = [];
     this.spawnObjects();
+    for (const s of this.sources) { s.berries = s.max; s.timer = 0; }
     this.lastReset = this.simTime;
     this.resetCount++;
     this.onReset?.();
@@ -1020,6 +1209,11 @@ export class World {
         ...(holder ? { held_by: holder.name } : {}),
       });
     }
+    for (const s of this.sources) {
+      entities.push(s.kind === 'bush'
+        ? { name: s.name, entity_type: 'berry_bush', anchored: true, position: s.pos, berries: s.berries, max_berries: s.max }
+        : { name: s.name, entity_type: 'pond', anchored: true, position: s.pos, radius: s.radius });
+    }
     for (const other of this.bodies.values()) {
       if (other.id === id) continue;
       entities.push({
@@ -1041,6 +1235,7 @@ export class World {
         move_target: b.target,
         move: { status: b.move, ...(b.target ? { target: b.target } : {}), ...(b.block || {}) },
         plan: this.planInfo(b),
+        needs: this.needsInfo(b),
         ...(b.auto ? { autopilot: 'schlendert ein paar Schritte' } : {}),
       },
       events: b.events.splice(0),
@@ -1054,7 +1249,7 @@ export class World {
     const now = performance.now();
     const agents = [...this.bodies.values()].map((b) => {
       const p = b.body.translation();
-      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
+      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, n: [r2(b.needs.hunger), r2(b.needs.thirst), r2(b.needs.boredom), r2(b.needs.joy), r2(b.needs.health)], in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
     });
     const objs = this.objs.filter((o) => !o.lost).map((o) => {
       const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;
@@ -1070,6 +1265,7 @@ export class World {
       t: 'snap', time: r2(this.simTime), paused: this.paused, speed: this.speed, lock: this.lockstep, hold: this.holders(),
       resetIn: this.nextResetIn === null ? null : Math.round(this.nextResetIn), resetCount: this.resetCount,
       agents, objs,
+      src: this.sources.map((s) => ({ id: s.id, k: s.kind, p: s.pos, r: s.radius, b: s.berries, m: s.max })),
     };
   }
 }

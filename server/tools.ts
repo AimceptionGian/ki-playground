@@ -12,13 +12,13 @@ export interface ToolDef {
 
 /** Eine Werkzeugliste für alle Wege: eingebauter Runner, MCP und HTTP-API. */
 export const TOOLS: ToolDef[] = [
-  { name: 'observe', description: 'Beobachte die Welt: dein Körper (mit laufendem Plan), alle Objekte und Plattformen, der Chat.', parameters: { type: 'object', properties: {} } },
+  { name: 'observe', description: 'Beobachte die Welt: dein Körper (mit laufendem Plan und Bedürfnissen), alle Objekte und Plattformen, der Chat.', parameters: { type: 'object', properties: {} } },
   {
     name: 'act',
     description: 'Gib deinem Körper einen Plan: Schritte, die er selbständig nacheinander ausführt. Kehrt sofort zurück; während der Körper handelt, kannst du weiterdenken. '
       + 'Er läuft selbst zu Objekten hin, springt über niedrige Hindernisse und zielt beim Werfen. Ein neuer Plan ersetzt den laufenden, append: true hängt an. '
       + 'Schritte: goto {position|name, radius?} · follow {name, distance?, seconds?} · pickup {name|position} · place {position, rotation?} · '
-      + 'throw {at|position|direction, speed?} · jump · say {text} · look {name|position} · wait {seconds} · wander {radius?, seconds?}',
+      + 'throw {at|position|direction, speed?} · jump · say {text} · look {name|position} · wait {seconds} · wander {radius?, seconds?} · eat {name?} (Beerenbusch) · drink {name?} (Teich)',
     parameters: {
       type: 'object',
       properties: {

@@ -154,3 +154,7 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 .agents em.wait { color: #8fc7ff; }
 .agents em.think { color: #f4d35e; }
 .agents em.away { color: var(--dim); }
+
+.agents .needs { display: flex; gap: 3px; margin-top: 4px; }
+.agents .need { flex: 1; height: 4px; background: rgba(160, 190, 220, 0.14); border-radius: 2px; overflow: hidden; display: block; }
+.agents .need i { display: block; height: 100%; width: 0; border-radius: 0; }

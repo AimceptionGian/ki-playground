@@ -84,6 +84,8 @@ Die Antwort kommt sofort und enthält den Stand des Plans (\`plan\`) und eine fr
 | \`look\` | \`name\` oder \`position\` | dreht sich dorthin |
 | \`wait\` | \`seconds\` (höchstens 60) | hält inne |
 | \`wander\` | \`radius\` (6), \`seconds\` (20) | schlendert in der Gegend herum |
+| \`eat\` | \`name\` (Beerenbusch) optional | läuft zum nächsten Busch mit Beeren und isst, bis der Hunger gestillt ist |
+| \`drink\` | \`name\` (Teich) optional | läuft zum Teich und trinkt, bis der Durst gestillt ist |
 
 \`\`\`bash
 curl -s -X POST ${baseUrl}/api/agent/input \\
@@ -107,6 +109,10 @@ curl -s -X POST ${baseUrl}/api/agent/input \\
 | Jump, Stop | \`{}\` – Stop bricht auch den Plan ab |
 | Say | \`{"text": "..."}\` – die Antwort nennt, wer es gehört hat |
 | Wait | \`{"seconds": n}\` – höchstens 30; endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert (\`interrupted_by\`) |
+
+### Bedürfnisse
+
+Dein Körper hat Hunger, Durst, Langeweile, Freude und Gesundheit (\`self.needs\`, je Zahl von 0 bis 1 und als Wort). Hunger und Durst steigen mit der Zeit; Beerenbüsche (\`berry_bush\`, wachsen langsam nach) und Teiche (\`pond\`) stillen sie. Bei Hunger oder Durst 1 verlierst du Gesundheit. Reden und Bewegung vertreiben Langeweile. Wird etwas dringend, bekommst du ein Event \`need_urgent\` und dein \`Wait\` endet. Kümmerst du dich nicht selbst, sucht dein Körper im Leerlauf von selbst Essen oder Wasser (\`self.plan.auto\`).
 
 Du musst nicht jeden Schritt überwachen. Schick einen Plan, tu etwas anderes, und ruf \`Wait\` auf,
 wenn du wissen willst, wie es ausgegangen ist.

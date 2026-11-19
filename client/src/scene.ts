@@ -4,7 +4,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export interface StaticPart { name: string; center: number[]; size: number[]; ground?: boolean }
 export interface Snap {
   time: number; paused: boolean; speed: number; lock?: boolean; hold?: string[]; resetIn: number | null; resetCount: number;
-  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean; in?: string }[];
+  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean; n?: number[]; in?: string }[];
+  src?: { id: number; k: 'bush' | 'pond'; p: number[]; r: number; b: number; m: number }[];
   objs: { id: number; kind: 'cube' | 'rock' | 'ring'; s?: string; name: string; p: number[]; q: number[] }[];
 }
 
@@ -38,6 +39,7 @@ export class Scene {
   private controls: OrbitControls;
   private objs = new Map<number, Tracked>();
   private agents = new Map<string, AgentNode>();
+  private sources = new Map<number, { node: THREE.Group; berries: THREE.Object3D[]; count: number }>();
   private water: THREE.ShaderMaterial;
   private staticGroup = new THREE.Group();
   private clock = new THREE.Clock();
@@ -194,9 +196,48 @@ export class Scene {
     return { node: g, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0, yaw: a.yaw, moving: false, legs, arms, color: a.color, name: a.name, label };
   }
 
+  private makeSource(src: NonNullable<Snap['src']>[number]) {
+    const g = new THREE.Group();
+    g.position.set(src.p[0], src.p[1], src.p[2]);
+    const berries: THREE.Object3D[] = [];
+    if (src.k === 'pond') {
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(src.r, src.r, 0.06, 40), new THREE.MeshStandardMaterial({ color: '#2a6f9e', roughness: 0.15, metalness: 0.2, emissive: '#143a57', emissiveIntensity: 0.5 }));
+      disc.position.y = 0.03;
+      disc.receiveShadow = true;
+      g.add(disc);
+    } else {
+      const leaf = new THREE.MeshStandardMaterial({ color: '#2f7a3d', roughness: 0.9, flatShading: true });
+      const blob = (x: number, y: number, z: number, r: number) => {
+        const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), leaf);
+        m.position.set(x, y, z);
+        m.castShadow = true;
+        g.add(m);
+      };
+      blob(0, 0.55, 0, 0.8); blob(0.5, 0.4, 0.3, 0.5); blob(-0.45, 0.4, -0.25, 0.55);
+      const red = new THREE.MeshStandardMaterial({ color: '#d6334a', roughness: 0.4, emissive: '#5a0f1c', emissiveIntensity: 0.5 });
+      const spots: number[][] = [[0.5, 0.95, 0.2], [-0.3, 1.05, 0.3], [0.1, 1.15, -0.4], [-0.7, 0.7, -0.1], [0.75, 0.65, -0.1]];
+      for (const [x, y, z] of spots) {
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), red);
+        b.position.set(x, y, z);
+        g.add(b);
+        berries.push(b);
+      }
+    }
+    this.scene.add(g);
+    return { node: g, berries, count: -1 };
+  }
+
   apply(s: Snap) {
     this.stamp++;
     this.paused = s.paused;
+    const live = new Set<number>();
+    for (const src of s.src || []) {
+      live.add(src.id);
+      let n = this.sources.get(src.id);
+      if (!n) { n = this.makeSource(src); this.sources.set(src.id, n); }
+      if (n.count !== src.b) { n.berries.forEach((b, i) => (b.visible = i < src.b)); n.count = src.b; }
+    }
+    for (const [id, n] of this.sources) if (!live.has(id)) { this.scene.remove(n.node); this.sources.delete(id); }
     for (const o of s.objs) {
       let t = this.objs.get(o.id);
       const sig = o.kind + (o.s || '');

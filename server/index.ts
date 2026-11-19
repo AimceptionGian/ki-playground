@@ -26,8 +26,9 @@ try {
   if (s.rockShape === 'ball' || s.rockShape === 'block') world.setRockShape(s.rockShape);
   if (typeof s.lockstep === 'boolean') world.lockstep = s.lockstep;
   if (typeof s.hearRange === 'number') world.hearRange = s.hearRange;
+  if (typeof s.hardness === 'number') world.hardness = s.hardness;
 } catch { /* noch keine gespeichert */ }
-const saveSettings = () => fs.writeFileSync(SETTINGS, JSON.stringify({ resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange }, null, 2));
+const saveSettings = () => fs.writeFileSync(SETTINGS, JSON.stringify({ resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange, hardness: world.hardness }, null, 2));
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
@@ -78,12 +79,13 @@ const wrap = (fn: (req: express.Request, res: express.Response) => unknown) => a
 app.get('/api/state', wrap(() => ({
   agents: store.agents.map(pub),
   statics: STATICS,
-  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange, time: world.simTime },
+  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange, hardness: world.hardness, time: world.simTime },
   baseUrl: BASE,
 })));
 
 app.post('/api/control', wrap((req) => {
-  const { paused, speed, resetIntervalMin, rockShape, lockstep, hearRange } = req.body || {};
+  const { paused, speed, resetIntervalMin, rockShape, lockstep, hearRange, hardness } = req.body || {};
+  if (typeof hardness === 'number' && hardness >= 0.1 && hardness <= 5) { world.hardness = hardness; saveSettings(); }
   if (typeof hearRange === 'number' && hearRange >= 0) { world.hearRange = hearRange; saveSettings(); broadcast({ t: 'agents' }); }
   if (typeof lockstep === 'boolean') { world.lockstep = lockstep; saveSettings(); broadcast({ t: 'agents' }); }
   if (rockShape === 'block' || rockShape === 'ball') { world.setRockShape(rockShape); saveSettings(); broadcast({ t: 'agents' }); }

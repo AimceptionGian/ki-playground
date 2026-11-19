@@ -21,6 +21,26 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
   return data;
 }
 
+// Hunger, Durst, Langeweile: hoch = schlecht. Freude, Gesundheit: hoch = gut.
+const NEED_BARS: { label: string; bad: boolean; color: string }[] = [
+  { label: 'Hunger', bad: true, color: '#e0a03a' },
+  { label: 'Durst', bad: true, color: '#4aa3df' },
+  { label: 'Langeweile', bad: true, color: '#a58bd6' },
+  { label: 'Freude', bad: false, color: '#f4d35e' },
+  { label: 'Gesundheit', bad: false, color: '#6fd08c' },
+];
+function NeedBars({ n }: { n: number[] }) {
+  return (
+    <span className="needs">
+      {NEED_BARS.map((d, i) => (
+        <span key={d.label} className="need" title={`${d.label}: ${Math.round(n[i] * 100)} %`}>
+          <i style={{ width: `${Math.round(n[i] * 100)}%`, background: d.bad && n[i] >= 0.8 ? '#e5534b' : d.color }} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export const RUNNER_LABEL = { extern: 'Extern (API / MCP)', api: 'Modell über Endpunkt', claude: 'Claude Code' } as const;
 const STATE_LABEL: Record<string, string> = { wait: 'wartet', think: 'überlegt', away: 'abwesend' };
 const STATE_TIP: Record<string, string> = {
@@ -57,7 +77,7 @@ export function App() {
   const scene = useRef<Scene | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [baseUrl, setBaseUrl] = useState('');
-  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null>, intents: {} as Record<string, string> });
+  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null>, intents: {} as Record<string, string>, needs: {} as Record<string, number[]> });
   const [lockstep, setLockstep] = useState(false);
   const [hearRange, setHearRange] = useState(30);
   const [resetMin, setResetMin] = useState(60);
@@ -101,9 +121,10 @@ export function App() {
           scene.current?.apply(m as Snap);
           const states: Record<string, string | null> = {};
           const intents: Record<string, string> = {};
-          for (const a of m.agents) { states[a.id] = a.st ?? null; if (a.in) intents[a.id] = a.in; }
+          const needs: Record<string, number[]> = {};
+          for (const a of m.agents) { states[a.id] = a.st ?? null; if (a.in) intents[a.id] = a.in; if (a.n) needs[a.id] = a.n; }
           const key = `${Math.floor(m.time)}|${m.paused}|${m.speed}|${m.resetIn}|${(m.hold || []).join()}|${JSON.stringify(states)}|${JSON.stringify(intents)}`;
-          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states, intents }); }
+          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states, intents, needs }); }
         } else if (m.t === 'agents') load().catch(() => {});
         else if (m.t === 'log') logSubs.current.forEach((f) => f(m.id, m.entry));
         else if (m.t === 'usage') setAgents((list) => list.map((a) => (a.id === m.id ? { ...a, usage: m.usage } : a)));
@@ -147,6 +168,7 @@ export function App() {
                 <b>{a.name}</b>
                 <small>{RUNNER_LABEL[a.runner]}{a.model ? ` · ${a.model}` : ''}</small>
                 {meta.intents[a.id] && <small className="intent" title="Plan, den der Körper gerade abarbeitet">→ {meta.intents[a.id]}</small>}
+                {meta.needs[a.id] && <NeedBars n={meta.needs[a.id]} />}
                 {a.usage && <UsageLine u={a.usage} />}
               </div>
               {meta.states[a.id] && !meta.paused
