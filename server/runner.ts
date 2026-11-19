@@ -36,6 +36,7 @@ export class Runners {
     if (agent.runner === 'api' && (!agent.baseUrl || !agent.model)) throw new Error('Endpunkt und Modell müssen gesetzt sein.');
     const h = agent.runner === 'api' ? this.apiLoop(agent) : this.claudeLoop(agent);
     this.handles.set(agent.id, h);
+    this.world.setDriven(agent.id, true);
     this.onChange?.();
   }
 
@@ -44,6 +45,7 @@ export class Runners {
     if (!h) return;
     h.stop();
     this.handles.delete(id);
+    this.world.setDriven(id, false);
     this.onChange?.();
   }
 
@@ -55,6 +57,7 @@ export class Runners {
   private finished(id: string, h: Handle) {
     if (this.handles.get(id) === h) {
       this.handles.delete(id);
+      this.world.setDriven(id, false);
       this.onChange?.();
     }
   }
@@ -121,7 +124,7 @@ export class Runners {
           } else {
             // wie im Paper: stoppt das Modell, bekommt es nur ein neutrales "Weiter."
             messages.push({ role: 'user', content: agent.continuePrompt });
-            await world.waitSim(1);
+            await world.waitSim(1, agent.id);
           }
         } catch (e: any) {
           if (!alive) break;

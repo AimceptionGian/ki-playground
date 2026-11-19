@@ -148,3 +148,8 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 .num select { width: 112px; padding: 4px 6px; font: 12px var(--sans); }
 
 .agents small.usage { font: 10.5px var(--mono); color: #9db3c9; font-variant-numeric: tabular-nums; margin-top: 2px; cursor: help; white-space: normal; }
+
+.num select { width: 128px; }
+.agents em.wait { color: #8fc7ff; }
+.agents em.think { color: #f4d35e; }
+.agents em.away { color: var(--dim); }

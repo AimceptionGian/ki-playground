@@ -24,8 +24,9 @@ try {
   const s = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
   if (typeof s.resetIntervalMin === 'number') world.resetIntervalMin = s.resetIntervalMin;
   if (s.rockShape === 'ball' || s.rockShape === 'block') world.setRockShape(s.rockShape);
+  if (typeof s.lockstep === 'boolean') world.lockstep = s.lockstep;
 } catch { /* noch keine gespeichert */ }
-const saveSettings = () => fs.writeFileSync(SETTINGS, JSON.stringify({ resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape }, null, 2));
+const saveSettings = () => fs.writeFileSync(SETTINGS, JSON.stringify({ resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep }, null, 2));
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
@@ -75,12 +76,13 @@ const wrap = (fn: (req: express.Request, res: express.Response) => unknown) => a
 app.get('/api/state', wrap(() => ({
   agents: store.agents.map(pub),
   statics: STATICS,
-  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, time: world.simTime },
+  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, time: world.simTime },
   baseUrl: BASE,
 })));
 
 app.post('/api/control', wrap((req) => {
-  const { paused, speed, resetIntervalMin, rockShape } = req.body || {};
+  const { paused, speed, resetIntervalMin, rockShape, lockstep } = req.body || {};
+  if (typeof lockstep === 'boolean') { world.lockstep = lockstep; saveSettings(); broadcast({ t: 'agents' }); }
   if (rockShape === 'block' || rockShape === 'ball') { world.setRockShape(rockShape); saveSettings(); broadcast({ t: 'agents' }); }
   if (typeof speed === 'number') world.speed = Math.max(0.1, Math.min(16, speed));
   if (typeof resetIntervalMin === 'number') { world.resetIntervalMin = Math.max(0, resetIntervalMin); saveSettings(); }

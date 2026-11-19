@@ -22,6 +22,12 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
 }
 
 export const RUNNER_LABEL = { extern: 'Extern (API / MCP)', api: 'Modell über Endpunkt', claude: 'Claude Code' } as const;
+const STATE_LABEL: Record<string, string> = { wait: 'wartet', think: 'überlegt', away: 'abwesend' };
+const STATE_TIP: Record<string, string> = {
+  wait: 'Steht in einem Wait – bereit, dass die Zeit weiterläuft',
+  think: 'Überlegt – die Welt wartet auf diesen Agenten',
+  away: 'Hat sich zu lange nicht gerührt – die Welt wartet nicht mehr auf ihn',
+};
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
 const COLORS = ['#b6e23a', '#ff8a5c', '#5cc8ff', '#f4d35e', '#d78bff', '#ff6f91'];
 
@@ -51,7 +57,8 @@ export function App() {
   const scene = useRef<Scene | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [baseUrl, setBaseUrl] = useState('');
-  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null });
+  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null> });
+  const [lockstep, setLockstep] = useState(false);
   const [resetMin, setResetMin] = useState(60);
   const [rockShape, setRockShape] = useState('block');
   const [selected, setSelected] = useState<string | null>(null);
@@ -68,6 +75,7 @@ export function App() {
     setBaseUrl(s.baseUrl);
     setResetMin(s.world.resetIntervalMin);
     setRockShape(s.world.rockShape);
+    setLockstep(!!s.world.lockstep);
     scene.current?.setStatics(s.statics);
   }, []);
 
@@ -89,8 +97,10 @@ export function App() {
         const m = JSON.parse(ev.data);
         if (m.t === 'snap') {
           scene.current?.apply(m as Snap);
-          const key = `${Math.floor(m.time)}|${m.paused}|${m.speed}|${m.resetIn}`;
-          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn }); }
+          const states: Record<string, string | null> = {};
+          for (const a of m.agents) states[a.id] = a.st ?? null;
+          const key = `${Math.floor(m.time)}|${m.paused}|${m.speed}|${m.resetIn}|${(m.hold || []).join()}|${JSON.stringify(states)}`;
+          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states }); }
         } else if (m.t === 'agents') load().catch(() => {});
         else if (m.t === 'log') logSubs.current.forEach((f) => f(m.id, m.entry));
         else if (m.t === 'usage') setAgents((list) => list.map((a) => (a.id === m.id ? { ...a, usage: m.usage } : a)));
@@ -116,7 +126,7 @@ export function App() {
 
       <header className="title">
         <span>SIMULATION</span>
-        <span className="dim"> · {!online ? 'KEINE VERBINDUNG' : fresh ? 'BEREIT' : meta.paused ? 'PAUSIERT' : `LÄUFT ${meta.speed}×`}</span>
+        <span className="dim"> · {!online ? 'KEINE VERBINDUNG' : fresh ? 'BEREIT' : meta.paused ? 'PAUSIERT' : meta.hold.length ? `STEHT · ${meta.hold.join(', ').toUpperCase()} ÜBERLEGT` : `LÄUFT ${meta.speed}×`}</span>
       </header>
 
       <aside className="panel left">
@@ -135,7 +145,9 @@ export function App() {
                 <small>{RUNNER_LABEL[a.runner]}{a.model ? ` · ${a.model}` : ''}</small>
                 {a.usage && <UsageLine u={a.usage} />}
               </div>
-              {a.runner !== 'extern' && <em className={a.running ? 'live' : ''}>{a.running ? 'aktiv' : 'aus'}</em>}
+              {meta.states[a.id] && !meta.paused
+                ? <em className={meta.states[a.id]!} title={STATE_TIP[meta.states[a.id]!]}>{STATE_LABEL[meta.states[a.id]!]}</em>
+                : a.runner !== 'extern' && <em className={a.running ? 'live' : ''}>{a.running ? 'aktiv' : 'aus'}</em>}
             </li>
           ))}
         </ul>
@@ -168,6 +180,13 @@ export function App() {
         <label className="num">
           <input type="number" min={0} value={resetMin} onChange={(e) => setResetMin(Number(e.target.value))} onBlur={() => control({ resetIntervalMin: resetMin })} />
           <small>Reset alle … min (0 = nie)</small>
+        </label>
+        <label className="num">
+          <select value={lockstep ? '1' : '0'} onChange={(e) => { setLockstep(e.target.value === '1'); control({ lockstep: e.target.value === '1' }); }}>
+            <option value="0">Echtzeit</option>
+            <option value="1">Wenn alle warten</option>
+          </select>
+          <small>Zeit läuft</small>
         </label>
         <label className="num">
           <select value={rockShape} onChange={(e) => { setRockShape(e.target.value); control({ rockShape: e.target.value }); }}>

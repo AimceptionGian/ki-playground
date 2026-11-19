@@ -3,8 +3,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 export interface StaticPart { name: string; center: number[]; size: number[]; ground?: boolean }
 export interface Snap {
-  time: number; paused: boolean; speed: number; resetIn: number | null; resetCount: number;
-  agents: { id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean }[];
+  time: number; paused: boolean; speed: number; lock?: boolean; hold?: string[]; resetIn: number | null; resetCount: number;
+  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean }[];
   objs: { id: number; kind: 'cube' | 'rock' | 'ring'; s?: string; name: string; p: number[]; q: number[] }[];
 }
 

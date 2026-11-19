@@ -108,6 +108,7 @@ Agent anklicken, das Panel öffnet sich.
 
 - **Pause / Weiter**: hält die Welt an. Claude-Code-Agenten werden mit angehalten, andere warten vor dem nächsten Schritt.
 - **Tempo** (0.25× bis 8×): wie schnell die Weltzeit läuft. Das Modell denkt weiter in Echtzeit, bei hohem Tempo reagiert der Agent also gröber.
+- **Zeit läuft** (Echtzeit oder „Wenn alle warten"): siehe [Wartemodus](#wartemodus).
 - **Welt-Reset**: setzt Objekte und Körper auf Anfang und leert den Kontext der Agenten. Ihre Dateien bleiben. Geschieht automatisch nach der eingestellten Weltzeit (Standard 60 min, 0 = nie) oder über **Welt zurücksetzen**.
 - **Form des Felsens**: standardmässig ein kantiger Block, der liegen bleibt. Umgestellt auf „Kugel, rollt" wird er sofort an Ort und Stelle getauscht.
 - **Kamera**: ziehen dreht, Mausrad zoomt, Rechtsklick-Ziehen verschiebt. **Kamera folgt …** hält den gewählten Agenten im Bild.
@@ -121,6 +122,29 @@ Agent anklicken, das Panel öffnet sich.
 - **Protokoll**: Gedanken, Aktionen und Ergebnisse in zeitlicher Folge.
 - **Verbindung**: Token, `curl`-Beispiel und der fertige Befehl, um den Körper als MCP-Server in Claude Code einzubinden.
 - Das Panel lässt sich an der Kopfzeile **verschieben** und an der Ecke unten rechts in der Grösse ändern. Doppelklick auf die Kopfzeile oder ⇥ dockt es wieder rechts an.
+
+## Wartemodus
+
+In Echtzeit läuft die Welt weiter, während ein Modell überlegt. Ein langsames Modell verliert dadurch Weltzeit,
+und bei hohem Tempo wird jeder Agent grob. Der Wartemodus („Zeit läuft: Wenn alle warten") dreht das um:
+
+- Die Zeit läuft **nur, solange jeder beteiligte Agent in einem `Wait` steht**.
+- Sie läuft dann genau bis zum kürzesten dieser Waits. Dieser Agent ist wieder dran, die Welt steht, bis auch er wieder wartet.
+- Beobachten und Handeln kosten keine Weltzeit. Wer Zeit vergehen lassen will, muss `Wait` rufen.
+- Der Tempo-Regler bestimmt nur noch, wie schnell die Zeitschübe abgespielt werden.
+
+Oben links steht dann zum Beispiel „STEHT · EKO2 ÜBERLEGT", und in der Agentenliste trägt jeder Agent seinen Zustand:
+
+| Zustand | Bedeutung |
+|---|---|
+| **wartet** | steht in einem `Wait`, bereit für den nächsten Zeitschub |
+| **überlegt** | die Welt wartet auf diesen Agenten |
+| **abwesend** | hat sich 60 Sekunden (Echtzeit) nicht gerührt; die Welt läuft ohne ihn weiter, bis er sich wieder meldet |
+
+Beteiligt ist jeder Agent, dessen Runner läuft, und jeder externe Agent, der sich schon einmal gemeldet hat.
+Ein Agent, der nie verbunden war, hält niemanden auf. Ist gar niemand beteiligt, läuft die Welt normal.
+
+Der Preis: Die Welt bewegt sich in Schüben statt fliessend, und der langsamste Denker bestimmt das Tempo für alle.
 
 ## Gut zu wissen
 

@@ -36,6 +36,7 @@ export function normalizeAction(type: string): string {
 
 export async function runTool(world: World, store: AgentStore, agent: Agent, name: string, args: any): Promise<unknown> {
   args = args || {};
+  world.touch(agent.id);
   try {
     switch (name) {
       case 'list_files': return store.listFiles(agent).map((f) => ({ path: f.path, size: f.size }));
@@ -60,12 +61,13 @@ export async function runTool(world: World, store: AgentStore, agent: Agent, nam
         break;
       case 'wait': {
         const s = Math.max(0, Math.min(30, Number(args.seconds) || 0));
-        await world.waitSim(s);
+        await world.waitSim(s, agent.id);
         result = { ok: true, waited: s };
         break;
       }
       default: return { ok: false, error: `Unbekannte Aktion: ${name}` };
     }
+    world.touch(agent.id);
     const o = world.observe(agent.id);
     return { result, time: o.time, self: o.self };
   } catch (e: any) {

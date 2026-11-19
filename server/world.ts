@@ -36,6 +36,9 @@ interface Body {
   holding: Obj | null;
   grounded: boolean;
   spawn: Vec3;
+  waits: number; // offene Wait-Aufrufe dieses Agenten
+  lastAct: number; // Echtzeit der letzten Regung (0 = hat sich nie gemeldet)
+  driven: boolean; // wird vom Server angetrieben (Runner läuft)
 }
 
 const DT = 1 / 60;
@@ -101,7 +104,8 @@ export class World {
   private bodies = new Map<string, Body>();
   private nextId = 1;
   private debt = 0;
-  private waiters: { until: number; resolve: () => void }[] = [];
+  private waiters: { until: number; resolve: () => void; id?: string }[] = [];
+  private released = false;
   private runWaiters: (() => void)[] = [];
   private rockCooldown = 0;
   private lastReset = 0;
@@ -112,6 +116,10 @@ export class World {
   resetIntervalMin = 60;
   /** Form des Felsens: kantiger Block (bleibt liegen) oder Kugel (rollt). */
   rockShape: 'block' | 'ball' = 'block';
+  /** Wartemodus: Die Zeit läuft nur, solange alle beteiligten Agenten in einem Wait stehen. */
+  lockstep = false;
+  /** Überlegt ein Agent länger als so viele Sekunden (Echtzeit), läuft die Welt ohne ihn weiter. */
+  thinkTimeout = 60;
   resetCount = 0;
   chat: { time: number; from: string; text: string }[] = [];
   onReset: (() => void) | null = null;
@@ -216,7 +224,7 @@ export class World {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...spawn).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn });
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false });
   }
 
   removeBody(id: string) {
@@ -236,6 +244,35 @@ export class World {
     const b = this.bodies.get(id);
     if (!b) throw new Error('Agent hat keinen Körper in der Welt');
     return b;
+  }
+
+  // ---------- Wartemodus ----------
+
+  /** Der Agent hat sich gerade gerührt (irgendein Aufruf). */
+  touch(id: string) {
+    const b = this.bodies.get(id);
+    if (b) b.lastAct = performance.now();
+  }
+
+  setDriven(id: string, on: boolean) {
+    const b = this.bodies.get(id);
+    if (!b) return;
+    b.driven = on;
+    if (on) b.lastAct = performance.now();
+  }
+
+  /** wait = steht in einem Wait · think = überlegt, die Welt wartet auf ihn · away = zu lange still, zählt nicht mit */
+  private stateOf(b: Body, now: number): 'wait' | 'think' | 'away' | null {
+    if (b.waits > 0) return 'wait';
+    if (b.lastAct === 0) return b.driven ? 'think' : null;
+    return now - b.lastAct < this.thinkTimeout * 1000 ? 'think' : b.driven || now - b.lastAct < 600_000 ? 'away' : null;
+  }
+
+  /** Namen der Agenten, auf die die Welt im Wartemodus gerade wartet. */
+  holders(): string[] {
+    if (!this.lockstep) return [];
+    const now = performance.now();
+    return [...this.bodies.values()].filter((b) => this.stateOf(b, now) === 'think').map((b) => b.name);
   }
 
   // ---------- Befehle ----------
@@ -349,12 +386,16 @@ export class World {
   /** Wird mit der echten verstrichenen Zeit aufgerufen; rechnet je nach Tempo mehrere Schritte. */
   tick(realDt: number) {
     if (this.paused) return;
+    if (this.holders().length) { this.debt = 0; return; }
     this.debt += Math.min(realDt, 0.1) * this.speed;
     let steps = 0;
+    this.released = false;
     while (this.debt >= DT && steps < 40) {
       this.step();
       this.debt -= DT;
       steps++;
+      // im Wartemodus endet der Schub genau dort, wo ein Agent wieder an der Reihe ist
+      if (this.lockstep && this.released) { this.debt = 0; break; }
     }
     if (steps === 40) this.debt = 0;
   }
@@ -388,7 +429,12 @@ export class World {
       const due = this.waiters.filter((w) => w.until <= this.simTime);
       if (due.length) {
         this.waiters = this.waiters.filter((w) => w.until > this.simTime);
-        due.forEach((w) => w.resolve());
+        const now = performance.now();
+        for (const w of due) {
+          const b = w.id ? this.bodies.get(w.id) : undefined;
+          if (b) { b.waits = Math.max(0, b.waits - 1); b.lastAct = now; this.released = true; }
+          w.resolve();
+        }
       }
     }
     if (this.resetIntervalMin > 0 && this.simTime - this.lastReset >= this.resetIntervalMin * 60) this.reset();
@@ -483,8 +529,10 @@ export class World {
   }
 
   /** Wartet eine Spanne in Simulationszeit (läuft bei Pause nicht weiter). */
-  waitSim(seconds: number): Promise<void> {
-    return new Promise((resolve) => this.waiters.push({ until: this.simTime + seconds, resolve }));
+  waitSim(seconds: number, id?: string): Promise<void> {
+    const b = id ? this.bodies.get(id) : undefined;
+    if (b) b.waits++;
+    return new Promise((resolve) => this.waiters.push({ until: this.simTime + seconds, resolve, id: b ? id : undefined }));
   }
 
   get nextResetIn(): number | null {
@@ -545,9 +593,10 @@ export class World {
 
   /** Kompakter Zustand für die 3D-Ansicht. */
   snapshot() {
+    const now = performance.now();
     const agents = [...this.bodies.values()].map((b) => {
       const p = b.body.translation();
-      return { id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded };
+      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded };
     });
     const objs = this.objs.filter((o) => !o.lost).map((o) => {
       const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;
@@ -560,7 +609,7 @@ export class World {
       };
     });
     return {
-      t: 'snap', time: r2(this.simTime), paused: this.paused, speed: this.speed,
+      t: 'snap', time: r2(this.simTime), paused: this.paused, speed: this.speed, lock: this.lockstep, hold: this.holders(),
       resetIn: this.nextResetIn === null ? null : Math.round(this.nextResetIn), resetCount: this.resetCount,
       agents, objs,
     };
