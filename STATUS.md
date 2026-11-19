@@ -52,8 +52,10 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
   Sprechenden schweigt man (`say` → `stopped` mit `remaining_s`; say-Schritt → Event `kept_silent`, Plan läuft weiter).
   Reinreden nur bewusst mit `interrupt: true`: der andere verstummt (Event `interrupted`, Ton per `{t:'hush'}` angehalten,
   noch nicht erzeugter Ton wird verworfen). Echter Lauf (Uno/Duo, 2 min): kein Durcheinander, keiner hat reingeredet
-- Offen: Gesprächsrhythmus. `heard` kommt am Anfang einer Äusserung → Zuhörer antwortet, während der andere noch spricht
-  (9 Abweisungen in 2 min, Pausen bis 16 s). Idee: `heard` erst am Ende der Äusserung zustellen/wecken
+- Erledigt: Gesprächsrhythmus. Inhalt (`heard`) erreicht Zuhörer erst am Ende der Äusserung (dann endet auch `wait`);
+  am Anfang nur `speaking_started` (mit `seconds`, weckt nicht). Abgebrochene Äusserung: Zuhörer hören den gesagten
+  Anfang mit „…“ und `cut: true`. Gleicher Lauf Uno/Duo 2 min: 15 statt 7 Sätze, 2 statt 10 Abweisungen,
+  Pause zwischen Sätzen median 7.9 s statt 16.8 s (inkl. Sprechdauer)
 - Offen: C langlebiger Prozess gegen ~2.7 s Neustart
 
 ## Nächster Schritt

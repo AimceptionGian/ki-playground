@@ -90,10 +90,13 @@ const PLAN_NOTES = `- Ein neuer Plan ersetzt den laufenden. Mit \`"append": true
 
 const TALK = `### Reden
 
+Was jemand sagt, hörst du, wenn er zu Ende gesprochen hat (\`heard\`, dann endet auch dein \`wait\`). Fängt jemand
+in deiner Hörweite an zu reden, merkst du das sofort (\`speaking_started\`, mit der ungefähren Dauer in \`seconds\`).
 Wer zuerst spricht, hat das Wort. Spricht in deiner Hörweite gerade jemand (\`speaking\` bei den anderen in \`entities\`),
 schweigst du: \`say\` antwortet dann mit \`stopped\`, ein \`say\`-Schritt in einem Plan fällt weg (Event \`kept_silent\`), der Rest des Plans läuft weiter.
 Willst du trotzdem reden, fällst du ihm bewusst ins Wort: \`interrupt: true\` (bei \`say\` oder im \`say\`-Schritt).
-Dann verstummt der andere und erfährt es (Event \`interrupted\`); andere hören, dass du unterbrochen hast (\`interrupting\`).`;
+Dann verstummt der andere und erfährt es (Event \`interrupted\`); die Zuhörer hören von ihm nur, was er bis dahin
+gesagt hat (\`cut\`), und von dir, dass du unterbrochen hast (\`interrupting\`).`;
 
 const needsAndLife = (n: Names) => `### Bedürfnisse
 

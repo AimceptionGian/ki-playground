@@ -14,7 +14,7 @@ const place = (id: string, x: number, z: number) => {
   w.addBody(id, id.toUpperCase(), '#f00');
   w.bodies.get(id).body.setTranslation({ x, y: 0.95, z }, true);
 };
-place('a', 0, 10); place('b', 2, 10); place('c', 40, 10); // c ausser Hörweite
+place('a', 0, 10); place('b', 2, 10); place('c', 40, 10); place('d', 1, 12); // c ausser Hörweite, d hört zu
 const run = (sec: number) => { for (let i = 0; i < sec * 60; i++) w.tick(1 / 60); };
 const events = (id: string, type: string) => w.bodies.get(id).events.filter((e: any) => e.type === type);
 run(0.5);
@@ -24,6 +24,22 @@ const check = (name: string, ok: boolean, info = '') => {
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${!ok && info ? ' – ' + info : ''}`);
 };
+
+// 0) Zuhören: Beginn sofort merken, Inhalt erst am Ende hören; ein wait endet erst dann
+{
+  let woke: string | false | null = null;
+  w.waitSim(30, 'd').then((r: string | false) => { woke = r; });
+  const r = w.say('a', 'Ich sage jetzt einen Satz, der eine Weile dauert.');
+  const flush = () => new Promise((res) => setTimeout(res, 0));
+  check('Zuhörer merkt den Beginn sofort (speaking_started)', events('d', 'speaking_started').some((e: any) => e.from === 'A' && e.seconds > 1));
+  check('…aber hört den Inhalt noch nicht', events('d', 'heard').length === 0);
+  run(r.seconds / 2); await flush();
+  check('wait endet nicht schon beim Beginn', woke === null, String(woke));
+  run(r.seconds / 2 + 0.1); await flush();
+  check('am Ende: Inhalt gehört', events('d', 'heard').some((e: any) => e.from === 'A' && e.text.startsWith('Ich sage') && !e.cut));
+  check('am Ende: wait endet (speech)', woke === 'speech', String(woke));
+  for (const id of ['a', 'b', 'd']) w.bodies.get(id).events.length = 0;
+}
 
 // 1) A spricht, B in der Nähe will auch: B schweigt
 const ra = w.say('a', 'Hallo zusammen, ich erzähle euch jetzt etwas über den Teich.');
@@ -36,15 +52,18 @@ const rc = w.say('c', 'Hier hinten ist es ruhig.');
 check('C ausser Hörweite darf gleichzeitig reden', rc.ok === true, JSON.stringify(rc));
 
 // 3) B fällt bewusst ins Wort: A verstummt (Ton wird angehalten) und erfährt es
-const seqA = said.find(([id]) => id === 'a')![1];
+run(1); // A hat schon ein paar Wörter gesagt
+const seqA = said.filter(([id]) => id === 'a').at(-1)![1];
 const rb2 = w.say('b', 'Moment, das stimmt nicht!', true);
 check('B darf mit interrupt reinreden', rb2.ok === true && rb2.interrupted === 'A', JSON.stringify(rb2));
 check('A verstummt (Ton angehalten)', hushed.some(([id, s]) => id === 'a' && s === seqA) && w.speechCut('a', seqA), JSON.stringify(hushed));
 check('A bekommt Event interrupted', events('a', 'interrupted').some((e: any) => e.by === 'B'));
-check('A hört, dass B unterbricht', events('a', 'heard').some((e: any) => e.from === 'B' && e.interrupting === 'A'));
+const cut = events('d', 'heard').find((e: any) => e.from === 'A' && e.cut);
+check('Zuhörer hört von A nur den Anfang (cut)', !!cut && cut.text.endsWith('…') && cut.text.length < 'Hallo zusammen, ich erzähle euch jetzt etwas über den Teich.'.length, JSON.stringify(cut));
 
 // 4) Nach dem Ende von Bs Satz darf A wieder
 run(4);
+check('A hört, dass B unterbricht (am Ende von Bs Satz)', events('a', 'heard').some((e: any) => e.from === 'B' && e.interrupting === 'A'));
 check('nach Bs Satz darf A wieder', w.say('a', 'Na gut.').ok === true);
 
 // 5) say-Schritt im Plan, während jemand spricht: fällt weg, Plan läuft weiter, Geist erfährt es

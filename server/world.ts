@@ -252,6 +252,8 @@ export class World {
   onSay: ((id: string, text: string, seq: number) => void) | null = null;
   onHush: ((id: string, seq: number) => void) | null = null; // Äusserung abgebrochen: Ton anhalten
   private speechSeq = 0;
+  // laufende Äusserungen: ihr Inhalt erreicht die Zuhörer erst am Ende
+  private utterances: { seq: number; from: string; text: string; start: number; until: number; listeners: { o: Body; dist: number }[]; interrupting?: string }[] = [];
 
   static async create(): Promise<World> {
     await RAPIER.init();
@@ -658,12 +660,40 @@ export class World {
     return null;
   }
 
-  /** Bricht die laufende Äusserung von b ab (Ton anhalten). */
+  /** Bricht die laufende Äusserung von b ab (Ton anhalten); die Zuhörer hören nur, was bis dahin gesagt war. */
   private cutSpeech(b: Body) {
     if (!b.speaking) return;
     b.cutSeq = Math.max(b.cutSeq, b.speaking.seq);
     this.onHush?.(b.id, b.speaking.seq);
+    const i = this.utterances.findIndex((u) => u.seq === b.speaking!.seq);
+    if (i >= 0) {
+      const u = this.utterances.splice(i, 1)[0];
+      const part = Math.max(0, Math.min(1, (this.simTime - u.start) / Math.max(0.01, u.until - u.start)));
+      const said = u.text.slice(0, Math.round(u.text.length * part)).replace(/\s+\S*$/, ''); // nur ganze Wörter
+      this.deliver(u, said ? said + ' …' : '…', true);
+    }
     b.speaking = null;
+  }
+
+  /** Eine Äusserung kommt bei den Zuhörern an: erst wenn sie zu Ende gesprochen (oder abgebrochen) ist. */
+  private deliver(u: World['utterances'][number], text: string, cut: boolean) {
+    const msg = { time: r2(u.start), from: u.from, text, ...(cut ? { cut: true } : {}), ...(u.interrupting ? { interrupting: u.interrupting } : {}) };
+    for (const { o, dist } of u.listeners) {
+      if (!this.bodies.has(o.id)) continue;
+      o.heard.push(msg);
+      if (o.heard.length > 30) o.heard.shift();
+      o.events.push({ time: r2(this.simTime), type: 'heard', from: u.from, text, distance: r2(dist), ...(cut ? { cut: true } : {}), ...(u.interrupting ? { interrupting: u.interrupting } : {}) });
+      this.social(o);
+      this.interruptWaits(o, 'speech');
+    }
+  }
+
+  /** Zu Ende gesprochene Äusserungen zustellen. */
+  private deliverDue() {
+    if (!this.utterances.some((u) => u.until <= this.simTime)) return;
+    const due = this.utterances.filter((u) => u.until <= this.simTime);
+    this.utterances = this.utterances.filter((u) => u.until > this.simTime);
+    for (const u of due) this.deliver(u, u.text, false);
   }
 
   /** Wurde diese Äusserung abgebrochen? (dann ihren Ton nicht mehr abspielen) */
@@ -689,33 +719,32 @@ export class World {
     }
     if (other) {
       this.cutSpeech(other);
-      other.events.push({ time: r2(this.simTime), type: 'interrupted', by: b.name, text: t });
+      other.events.push({ time: r2(this.simTime), type: 'interrupted', by: b.name });
     }
     this.cutSpeech(b); // wer selbst noch redet und neu ansetzt, bricht den alten Satz ab
     const seq = ++this.speechSeq;
-    b.speaking = { seq, until: this.simTime + this.speechSeconds(t), text: t };
+    const until = this.simTime + this.speechSeconds(t);
+    b.speaking = { seq, until, text: t };
     const msg = { time: r2(this.simTime), from: b.name, text: t, ...(other ? { interrupting: other.name } : {}) };
     this.onSay?.(id, t, seq);
     this.chat.push(msg);
     if (this.chat.length > 50) this.chat.shift();
     b.heard.push(msg);
+    if (b.heard.length > 30) b.heard.shift();
     this.social(b);
+    // Zuhörer merken sofort, dass jemand spricht; was, hören sie erst am Ende des Satzes (deliverDue)
     const p = b.body.translation();
-    const heardBy: string[] = [];
+    const listeners: { o: Body; dist: number }[] = [];
     for (const o of this.bodies.values()) {
       if (o === b) continue;
       const q = o.body.translation();
       const dist = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z);
       if (this.hearRange > 0 && dist > this.hearRange) continue;
-      o.heard.push(msg);
-      if (o.heard.length > 30) o.heard.shift();
-      o.events.push({ time: msg.time, type: 'heard', from: b.name, text: t, distance: r2(dist), ...(other ? { interrupting: other.name } : {}) });
-      heardBy.push(o.name);
-      this.social(o);
-      this.interruptWaits(o, 'speech');
+      listeners.push({ o, dist });
+      o.events.push({ time: r2(this.simTime), type: 'speaking_started', from: b.name, seconds: r2(until - this.simTime), ...(other ? { interrupting: other.name } : {}) });
     }
-    if (b.heard.length > 30) b.heard.shift();
-    return { ok: true, heard_by: heardBy, ...(other ? { interrupted: other.name } : {}) };
+    this.utterances.push({ seq, from: b.name, text: t, start: this.simTime, until, listeners, interrupting: other?.name });
+    return { ok: true, heard_by: listeners.map((l) => l.o.name), seconds: r2(until - this.simTime), ...(other ? { interrupted: other.name } : {}) };
   }
 
   /** Wer wartet, wird geweckt: jemand spricht ihn an, oder sein Plan ist fertig. */
@@ -1265,6 +1294,7 @@ export class World {
   }
 
   private step() {
+    this.deliverDue();
     for (const b of this.bodies.values()) {
       this.tickLife(b);
       this.tickNeeds(b);
