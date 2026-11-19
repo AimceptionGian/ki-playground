@@ -1,6 +1,13 @@
 {
   "checks": [
-    { "name": "Typecheck", "command": "npx tsc --noEmit" }
+    {
+      "name": "Typecheck",
+      "command": "npx tsc --noEmit"
+    },
+    {
+      "name": "Bewegung",
+      "command": "npm run test:moves --silent"
+    }
   ],
   "maxBlocks": 3
 }
