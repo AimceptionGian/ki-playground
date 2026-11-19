@@ -109,6 +109,7 @@ Agent anklicken, das Panel öffnet sich.
 - **Pause / Weiter**: hält die Welt an. Claude-Code-Agenten werden mit angehalten, andere warten vor dem nächsten Schritt.
 - **Tempo** (0.25× bis 8×): wie schnell die Weltzeit läuft. Das Modell denkt weiter in Echtzeit, bei hohem Tempo reagiert der Agent also gröber.
 - **Welt-Reset**: setzt Objekte und Körper auf Anfang und leert den Kontext der Agenten. Ihre Dateien bleiben. Geschieht automatisch nach der eingestellten Weltzeit (Standard 60 min, 0 = nie) oder über **Welt zurücksetzen**.
+- **Form des Felsens**: standardmässig ein kantiger Block, der liegen bleibt. Umgestellt auf „Kugel, rollt" wird er sofort an Ort und Stelle getauscht.
 - **Kamera**: ziehen dreht, Mausrad zoomt, Rechtsklick-Ziehen verschiebt. **Kamera folgt …** hält den gewählten Agenten im Bild.
 - **Sprechblasen** zeigen, was ein Agent gerade denkt oder sagt.
 - **Meldungen unten links** erscheinen, wenn ein Agent in seine Dateien schreibt. Sie verschwinden nach zehn Sekunden; die Maus darauf hält sie fest, ✕ schliesst sie, ein Klick auf den Titel öffnet den Agenten.

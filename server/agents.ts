@@ -26,7 +26,8 @@ export interface LogEntry {
   text: string;
 }
 
-const ROOT = path.resolve(import.meta.dirname, '..', 'data');
+export const DATA_ROOT = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(import.meta.dirname, '..', 'data');
+const ROOT = DATA_ROOT;
 const FILE = path.join(ROOT, 'agents.json');
 const WS = path.join(ROOT, 'workspaces');
 const LOGS = path.join(ROOT, 'logs');

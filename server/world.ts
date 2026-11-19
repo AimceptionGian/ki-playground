@@ -110,6 +110,8 @@ export class World {
   paused = true;
   speed = 1;
   resetIntervalMin = 60;
+  /** Form des Felsens: kantiger Block (bleibt liegen) oder Kugel (rollt). */
+  rockShape: 'block' | 'ball' = 'block';
   resetCount = 0;
   chat: { time: number; from: string; text: string }[] = [];
   onReset: (() => void) | null = null;
@@ -159,7 +161,7 @@ export class World {
     } else if (kind === 'rock') {
       size = [1.4, 1.4, 1.4];
       color = '#2a3644';
-      this.rw.createCollider(RAPIER.ColliderDesc.ball(0.7).setFriction(0.9).setRestitution(0.2).setDensity(3), body);
+      this.rw.createCollider(this.rockCollider(), body);
     } else {
       size = [2.8, 0.36, 2.8];
       color = '#e8eef5';
@@ -180,6 +182,28 @@ export class World {
     const o: Obj = { id: this.nextId++, name, kind, body, size, color, heldBy: null, lost: false, spawned, initPos: pos, prevVel: [0, 0, 0] };
     this.objs.push(o);
     return o;
+  }
+
+  private rockCollider() {
+    // beide Formen wiegen etwa gleich viel
+    return this.rockShape === 'ball'
+      ? RAPIER.ColliderDesc.ball(0.7).setFriction(0.9).setRestitution(0.2).setDensity(3)
+      : RAPIER.ColliderDesc.cuboid(0.7, 0.7, 0.7).setFriction(0.9).setRestitution(0.1).setDensity(1.6);
+  }
+
+  /** Tauscht die Form des Felsens an Ort und Stelle. */
+  setRockShape(shape: 'block' | 'ball') {
+    if (shape === this.rockShape) return;
+    this.rockShape = shape;
+    for (const o of this.objs) {
+      if (o.kind !== 'rock') continue;
+      for (let i = o.body.numColliders() - 1; i >= 0; i--) this.rw.removeCollider(o.body.collider(i), true);
+      this.rw.createCollider(this.rockCollider(), o.body);
+      if (!o.heldBy && !o.lost) {
+        const t = o.body.translation();
+        o.body.setTranslation({ x: t.x, y: t.y + 0.05, z: t.z }, true);
+      }
+    }
   }
 
   // ---------- Körper der Agenten ----------
@@ -273,7 +297,7 @@ export class World {
     const rot = data?.rotation ? eulerDegToQuat(asVec3(data.rotation, 'rotation')) : { x: 0, y: 0, z: 0, w: 1 };
     const o = b.holding;
     if (o.kind !== 'ring') {
-      const shape = o.kind === 'cube' ? new RAPIER.Cuboid(0.47, 0.47, 0.47) : new RAPIER.Ball(0.66);
+      const shape = o.kind === 'cube' ? new RAPIER.Cuboid(0.47, 0.47, 0.47) : this.rockShape === 'ball' ? new RAPIER.Ball(0.66) : new RAPIER.Cuboid(0.66, 0.66, 0.66);
       const hit = this.rw.intersectionWithShape({ x: pos[0], y: pos[1], z: pos[2] }, rot, shape);
       if (hit) return { ok: false, error: 'Platz ist belegt – dort ist bereits etwas.' };
     }
@@ -485,7 +509,7 @@ export class World {
       const q = o.body.rotation();
       entities.push({
         name: o.name, entity_type: o.kind,
-        shape: o.kind === 'cube' ? 'block' : o.kind === 'rock' ? 'ball' : 'ring',
+        shape: o.kind === 'cube' ? 'block' : o.kind === 'rock' ? this.rockShape : 'ring',
         anchored: false,
         position: holder ? [r2(t.x), r2(t.y + 1.7), r2(t.z)] : rv3(t),
         size: o.size,
@@ -530,7 +554,7 @@ export class World {
       const t = holder ? holder.body.translation() : o.body.translation();
       const q = o.body.rotation();
       return {
-        id: o.id, kind: o.kind, name: o.name,
+        id: o.id, kind: o.kind, name: o.name, ...(o.kind === 'rock' ? { s: this.rockShape } : {}),
         p: holder ? [r2(t.x), r2(t.y + 1.7), r2(t.z)] : [r2(t.x), r2(t.y), r2(t.z)],
         q: [r2(q.x), r2(q.y), r2(q.z), r2(q.w)],
       };

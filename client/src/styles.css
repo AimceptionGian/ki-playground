@@ -144,3 +144,5 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 
 /* Linie von einer ausgewichenen Sprechblase hinunter zu ihrem Agenten */
 .stem { position: absolute; left: 50%; top: calc(100% - 3px); width: 2px; margin-left: -1px; background: linear-gradient(rgba(238, 243, 248, 0.95), rgba(238, 243, 248, 0.35)); border-radius: 1px; }
+
+.num select { width: 112px; padding: 4px 6px; font: 12px var(--sans); }

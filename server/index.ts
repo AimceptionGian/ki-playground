@@ -1,11 +1,12 @@
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createVite } from 'vite';
 import react from '@vitejs/plugin-react';
 import { World, STATICS } from './world.ts';
-import { AgentStore, type Agent } from './agents.ts';
+import { AgentStore, DATA_ROOT, type Agent } from './agents.ts';
 import { Runners } from './runner.ts';
 import { TOOLS, runTool, normalizeAction } from './tools.ts';
 
@@ -16,6 +17,15 @@ const world = await World.create();
 const store = new AgentStore(BASE);
 const runners = new Runners(world, store);
 for (const a of store.agents) world.addBody(a.id, a.name, a.color);
+
+// Welt-Einstellungen überdauern einen Neustart
+const SETTINGS = path.join(DATA_ROOT, 'settings.json');
+try {
+  const s = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
+  if (typeof s.resetIntervalMin === 'number') world.resetIntervalMin = s.resetIntervalMin;
+  if (s.rockShape === 'ball' || s.rockShape === 'block') world.setRockShape(s.rockShape);
+} catch { /* noch keine gespeichert */ }
+const saveSettings = () => fs.writeFileSync(SETTINGS, JSON.stringify({ resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape }, null, 2));
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
@@ -64,14 +74,15 @@ const wrap = (fn: (req: express.Request, res: express.Response) => unknown) => a
 app.get('/api/state', wrap(() => ({
   agents: store.agents.map(pub),
   statics: STATICS,
-  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, time: world.simTime },
+  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, time: world.simTime },
   baseUrl: BASE,
 })));
 
 app.post('/api/control', wrap((req) => {
-  const { paused, speed, resetIntervalMin } = req.body || {};
+  const { paused, speed, resetIntervalMin, rockShape } = req.body || {};
+  if (rockShape === 'block' || rockShape === 'ball') { world.setRockShape(rockShape); saveSettings(); broadcast({ t: 'agents' }); }
   if (typeof speed === 'number') world.speed = Math.max(0.1, Math.min(16, speed));
-  if (typeof resetIntervalMin === 'number') world.resetIntervalMin = Math.max(0, resetIntervalMin);
+  if (typeof resetIntervalMin === 'number') { world.resetIntervalMin = Math.max(0, resetIntervalMin); saveSettings(); }
   if (typeof paused === 'boolean') {
     world.setPaused(paused);
     runners.setPaused(paused);
@@ -178,5 +189,10 @@ const vite = await createVite({
   server: { middlewareMode: true, hmr: { server } },
 });
 app.use(vite.middlewares);
+
+// Beim Beenden keine Agenten-Prozesse zurücklassen, die weiter Kontingent verbrauchen
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  process.on(sig, () => { runners.stopAll(); process.exit(0); });
+}
 
 server.listen(PORT, '127.0.0.1', () => console.log(`KI Playground läuft auf ${BASE}`));

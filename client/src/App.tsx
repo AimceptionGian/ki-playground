@@ -35,6 +35,7 @@ export function App() {
   const [baseUrl, setBaseUrl] = useState('');
   const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null });
   const [resetMin, setResetMin] = useState(60);
+  const [rockShape, setRockShape] = useState('block');
   const [selected, setSelected] = useState<string | null>(null);
   const [follow, setFollow] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -48,6 +49,7 @@ export function App() {
     setAgents(s.agents);
     setBaseUrl(s.baseUrl);
     setResetMin(s.world.resetIntervalMin);
+    setRockShape(s.world.rockShape);
     scene.current?.setStatics(s.statics);
   }, []);
 
@@ -146,6 +148,13 @@ export function App() {
         <label className="num">
           <input type="number" min={0} value={resetMin} onChange={(e) => setResetMin(Number(e.target.value))} onBlur={() => control({ resetIntervalMin: resetMin })} />
           <small>Reset alle … min (0 = nie)</small>
+        </label>
+        <label className="num">
+          <select value={rockShape} onChange={(e) => { setRockShape(e.target.value); control({ rockShape: e.target.value }); }}>
+            <option value="block">Block</option>
+            <option value="ball">Kugel, rollt</option>
+          </select>
+          <small>Form des Felsens</small>
         </label>
         <button className="ghost" onClick={() => confirm('Welt jetzt zurücksetzen? Objekte und Körper gehen auf Anfang, die Dateien der Agenten bleiben.') && guard(() => api('/api/reset', 'POST'))}>Welt zurücksetzen</button>
       </footer>

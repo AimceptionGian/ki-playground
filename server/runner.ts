@@ -47,6 +47,11 @@ export class Runners {
     this.onChange?.();
   }
 
+  /** Beendet alle laufenden Agenten, z. B. bevor der Server stoppt. */
+  stopAll() {
+    for (const id of [...this.handles.keys()]) this.stop(id);
+  }
+
   private finished(id: string, h: Handle) {
     if (this.handles.get(id) === h) {
       this.handles.delete(id);

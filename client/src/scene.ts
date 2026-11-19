@@ -5,10 +5,10 @@ export interface StaticPart { name: string; center: number[]; size: number[]; gr
 export interface Snap {
   time: number; paused: boolean; speed: number; resetIn: number | null; resetCount: number;
   agents: { id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean }[];
-  objs: { id: number; kind: 'cube' | 'rock' | 'ring'; name: string; p: number[]; q: number[] }[];
+  objs: { id: number; kind: 'cube' | 'rock' | 'ring'; s?: string; name: string; p: number[]; q: number[] }[];
 }
 
-interface Tracked { node: THREE.Object3D; pos: THREE.Vector3; quat: THREE.Quaternion; seen: number }
+interface Tracked { sig?: string; node: THREE.Object3D; pos: THREE.Vector3; quat: THREE.Quaternion; seen: number }
 interface AgentNode extends Tracked { yaw: number; moving: boolean; legs: THREE.Object3D[]; arms: THREE.Object3D[]; color: string; name: string; label: THREE.Sprite }
 
 const WATER_FRAG = `
@@ -128,11 +128,14 @@ export class Scene {
     }
   }
 
-  private makeObj(kind: string): THREE.Object3D {
+  private makeObj(kind: string, shape?: string): THREE.Object3D {
     let mesh: THREE.Mesh;
     if (kind === 'cube') {
       mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#b4bcc6', roughness: 0.8 }));
       mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({ color: '#e9eef4', transparent: true, opacity: 0.5 })));
+    } else if (kind === 'rock' && shape !== 'ball') {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), new THREE.MeshStandardMaterial({ color: '#27323f', roughness: 0.7 }));
+      mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({ color: '#9fb2c6', transparent: true, opacity: 0.45 })));
     } else if (kind === 'rock') {
       mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.76, 0), new THREE.MeshStandardMaterial({ color: '#27323f', roughness: 0.7, flatShading: true }));
     } else {
@@ -187,8 +190,10 @@ export class Scene {
     this.paused = s.paused;
     for (const o of s.objs) {
       let t = this.objs.get(o.id);
+      const sig = o.kind + (o.s || '');
+      if (t && t.sig !== sig) { this.scene.remove(t.node); t = undefined; }
       if (!t) {
-        t = { node: this.makeObj(o.kind), pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0 };
+        t = { sig, node: this.makeObj(o.kind, o.s), pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0 };
         t.node.position.set(o.p[0], o.p[1], o.p[2]);
         this.scene.add(t.node);
         this.objs.set(o.id, t);
