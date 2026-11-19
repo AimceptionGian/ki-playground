@@ -50,6 +50,7 @@ setInterval(() => store.scan(), 1000);
 runners.onChange = () => broadcast({ t: 'agents' });
 store.onUsage = (id, usage) => broadcast({ t: 'usage', id, usage });
 world.onReset = () => broadcast({ t: 'reset' });
+world.onSay = (id, text) => store.log(id, world.simTime, 'say', text.slice(0, 500));
 
 let last = performance.now();
 let frame = 0;

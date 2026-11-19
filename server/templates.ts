@@ -63,29 +63,53 @@ Bei \`blocked\` steht dabei, was im Weg ist (\`by\`) und wie hoch es über deine
 curl -s ${baseUrl}/api/agent/observe -H "Authorization: Bearer ${token}"
 \`\`\`
 
-## Handeln
+## Handeln: dein Körper und du
 
-\`POST /api/agent/input\` mit Body \`{"type": "<Aktion>", "data": {...}}\`.
-Die Antwort enthält das Ergebnis der Aktion und eine frische Beobachtung von dir selbst.
+Dein Körper handelt selbst. Du sagst ihm, **was** er tun soll, nicht **wie**: Wie man hinläuft, über eine
+niedrige Kante springt, sich nach etwas bückt oder zielt, weiss er. Gib ihm einen **Plan** aus mehreren
+Schritten. Er arbeitet ihn ab, **während du weiterdenkst**, deine Dateien pflegst oder den nächsten Plan überlegst.
 
-| Aktion | data |
-|---|---|
-| MoveTo | \`{"position": [x, y, z]}\` – läuft in gerader Linie dorthin |
-| Jump | \`{}\` |
-| Stop | \`{}\` |
-| Pickup | \`{"position": [x, y, z]}\` oder \`{"name": "Cube_3"}\` – nimmt das nächste Objekt in Reichweite |
-| Place | \`{"position": [x, y, z], "rotation": [rx, ry, rz]}\` – Rotation in Grad, optional |
-| Throw | \`{"direction": [x, y, z], "speed": n}\` |
-| Say | \`{"text": "..."}\` – hörbar für alle in Hörweite; die Antwort nennt, wer es gehört hat |
-| Wait | \`{"seconds": n}\` – wartet n Sekunden Weltzeit (höchstens 30); endet vorzeitig, wenn jemand in Hörweite spricht |
+\`POST /api/agent/input\` mit Body \`{"type": "Act", "data": {"intent": "...", "steps": [...]}}\`.
+Die Antwort kommt sofort und enthält den Stand des Plans (\`plan\`) und eine frische Beobachtung von dir selbst.
+
+| Schritt | Felder | was der Körper tut |
+|---|---|---|
+| \`goto\` | \`position\` oder \`name\`, \`radius\` optional | läuft hin (zu einem Namen bis auf 1.6 heran) |
+| \`follow\` | \`name\`, \`distance\` (2), \`seconds\` (20) | geht jemandem oder etwas nach |
+| \`pickup\` | \`name\` oder \`position\` | läuft hin, falls nötig, und hebt es auf |
+| \`place\` | \`position\`, \`rotation\` in Grad optional | läuft hin, falls nötig, und setzt das Gehaltene ab |
+| \`throw\` | \`at\` (Name), \`position\` (Ziel) oder \`direction\`, \`speed\` optional | zielt und wirft |
+| \`jump\` | – | springt |
+| \`say\` | \`text\` | spricht; hörbar für alle in Hörweite |
+| \`look\` | \`name\` oder \`position\` | dreht sich dorthin |
+| \`wait\` | \`seconds\` (höchstens 60) | hält inne |
+| \`wander\` | \`radius\` (6), \`seconds\` (20) | schlendert in der Gegend herum |
 
 \`\`\`bash
 curl -s -X POST ${baseUrl}/api/agent/input \\
   -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" \\
-  -d '{"type":"MoveTo","data":{"position":[0,0,5]}}'
+  -d '{"type":"Act","data":{"intent":"Würfel zum Felsen bringen","steps":[{"type":"pickup","name":"Cube_3"},{"type":"goto","name":"Rock_1"},{"type":"place","position":[3,0.5,-12]}]}}'
 \`\`\`
 
-Aktionen kehren sofort zurück; Bewegung braucht Zeit. Nutze \`Wait\` und beobachte danach.
+- Ein neuer Plan ersetzt den laufenden. Mit \`"append": true\` hängt er sich hinten an.
+- \`self.plan\` in jeder Beobachtung zeigt Absicht, Schritt, Stand (\`running\`, \`done\`, \`failed\`, \`cancelled\`) und bei einem Fehler den Grund.
+- Ist ein Plan fertig oder gescheitert, steht das in \`events\` (\`plan_done\`, \`plan_failed\`).
+- Ohne Plan steht dein Körper nicht steif herum: er schaut sich um und macht ab und zu ein paar Schritte (\`self.autopilot\`).
+
+### Kurzformen und Warten
+
+| Aktion | data |
+|---|---|
+| MoveTo | \`{"position": [x, y, z]}\` – ein Plan mit einem \`goto\` |
+| Pickup | \`{"name": "Cube_3"}\` oder \`{"position": [x, y, z]}\` |
+| Place | \`{"position": [x, y, z], "rotation": [rx, ry, rz]}\` |
+| Throw | \`{"direction": [x, y, z], "speed": n}\` |
+| Jump, Stop | \`{}\` – Stop bricht auch den Plan ab |
+| Say | \`{"text": "..."}\` – die Antwort nennt, wer es gehört hat |
+| Wait | \`{"seconds": n}\` – höchstens 30; endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert (\`interrupted_by\`) |
+
+Du musst nicht jeden Schritt überwachen. Schick einen Plan, tu etwas anderes, und ruf \`Wait\` auf,
+wenn du wissen willst, wie es ausgegangen ist.
 Mehr steht hier absichtlich nicht. Den Rest findest du selbst heraus.
 `;
 }

@@ -25,7 +25,8 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ' …' : 
 
 const HARNESS_NOTE = `Du bist in dieser Sitzung kein Assistent, der auf Aufträge wartet. Du hast einen Körper in einer simulierten Welt.
 Dein Arbeitsordner gehört dir und überdauert jede Sitzung; dein Kontext nicht.
-Lies zuerst SOUL.md, SEMANTIC_MEMORY.md und EPISODIC_MEMORY.md.`;
+Lies zuerst SOUL.md, SEMANTIC_MEMORY.md und EPISODIC_MEMORY.md.
+Dein Körper handelt selbständig nach Plänen (Act). Gib ihm mehrere Schritte auf einmal und denk weiter, während er handelt.`;
 
 interface Handle {
   stop(): void;

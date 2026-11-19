@@ -57,7 +57,7 @@ export function App() {
   const scene = useRef<Scene | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [baseUrl, setBaseUrl] = useState('');
-  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null> });
+  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null>, intents: {} as Record<string, string> });
   const [lockstep, setLockstep] = useState(false);
   const [hearRange, setHearRange] = useState(30);
   const [resetMin, setResetMin] = useState(60);
@@ -100,9 +100,10 @@ export function App() {
         if (m.t === 'snap') {
           scene.current?.apply(m as Snap);
           const states: Record<string, string | null> = {};
-          for (const a of m.agents) states[a.id] = a.st ?? null;
-          const key = `${Math.floor(m.time)}|${m.paused}|${m.speed}|${m.resetIn}|${(m.hold || []).join()}|${JSON.stringify(states)}`;
-          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states }); }
+          const intents: Record<string, string> = {};
+          for (const a of m.agents) { states[a.id] = a.st ?? null; if (a.in) intents[a.id] = a.in; }
+          const key = `${Math.floor(m.time)}|${m.paused}|${m.speed}|${m.resetIn}|${(m.hold || []).join()}|${JSON.stringify(states)}|${JSON.stringify(intents)}`;
+          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states, intents }); }
         } else if (m.t === 'agents') load().catch(() => {});
         else if (m.t === 'log') logSubs.current.forEach((f) => f(m.id, m.entry));
         else if (m.t === 'usage') setAgents((list) => list.map((a) => (a.id === m.id ? { ...a, usage: m.usage } : a)));
@@ -145,6 +146,7 @@ export function App() {
               <div>
                 <b>{a.name}</b>
                 <small>{RUNNER_LABEL[a.runner]}{a.model ? ` · ${a.model}` : ''}</small>
+                {meta.intents[a.id] && <small className="intent" title="Plan, den der Körper gerade abarbeitet">→ {meta.intents[a.id]}</small>}
                 {a.usage && <UsageLine u={a.usage} />}
               </div>
               {meta.states[a.id] && !meta.paused

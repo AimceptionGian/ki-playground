@@ -45,7 +45,42 @@ interface Body {
   stuck: number; // Sekunden ohne Fortschritt am Boden
   events: Record<string, unknown>[]; // was seit der letzten Beobachtung passiert ist
   heard: { time: number; from: string; text: string }[]; // was dieser Agent gehört oder selbst gesagt hat
+  plan: Plan | null; // was der Körper gerade selbständig abarbeitet
+  lookYaw: number | null; // wohin der Körper schaut, wenn er nicht läuft
+  auto: boolean; // schlendert im Leerlauf von selbst
+  idle: number; // Sekunden ohne Plan
+  nextLook: number; // Weltzeit, zu der er sich im Leerlauf wieder umschaut
 }
+
+/** Ein Schritt eines Plans. Welche Felder zählen, hängt vom Typ ab (siehe STEP_TYPES). */
+export interface Step {
+  type: string;
+  position?: Vec3;
+  name?: string;
+  at?: string;
+  text?: string;
+  seconds?: number;
+  radius?: number;
+  distance?: number;
+  direction?: Vec3;
+  speed?: number;
+  rotation?: Vec3;
+}
+
+interface Plan {
+  id: number;
+  intent: string;
+  steps: Step[];
+  idx: number;
+  status: 'running' | 'done' | 'failed' | 'cancelled';
+  error?: string;
+  sub: Record<string, any>; // Zustand des laufenden Schritts
+}
+
+export const STEP_TYPES = ['goto', 'follow', 'pickup', 'place', 'throw', 'jump', 'say', 'look', 'wait', 'wander'] as const;
+const MAX_STEPS = 20;
+const TURN_SPEED = 9; // rad/s
+const MAX_JUMP_UP = 2.3; // so hoch kommt ein Sprung über die Füsse
 
 const DT = 1 / 60;
 const GRAVITY = -20;
@@ -81,6 +116,8 @@ export const STATICS: StaticPart[] = [
 ];
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const clampIsland = (n: number, lim: number) => Math.max(-lim, Math.min(lim, n));
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 const v3 = (v: { x: number; y: number; z: number }): Vec3 => [v.x, v.y, v.z];
 const rv3 = (v: { x: number; y: number; z: number }): Vec3 => [r2(v.x), r2(v.y), r2(v.z)];
 
@@ -111,7 +148,8 @@ export class World {
   private bodies = new Map<string, Body>();
   private nextId = 1;
   private debt = 0;
-  private waiters: { until: number; resolve: (interrupted: boolean) => void; id?: string }[] = [];
+  private waiters: { until: number; resolve: (interrupted: string | false) => void; id?: string }[] = [];
+  private nextPlanId = 1;
   private released = false;
   private runWaiters: (() => void)[] = [];
   private rockCooldown = 0;
@@ -132,6 +170,8 @@ export class World {
   resetCount = 0;
   chat: { time: number; from: string; text: string }[] = [];
   onReset: (() => void) | null = null;
+  /** Jemand hat etwas gesagt (auch aus einem Plan heraus). */
+  onSay: ((id: string, text: string) => void) | null = null;
 
   static async create(): Promise<World> {
     await RAPIER.init();
@@ -234,7 +274,7 @@ export class World {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...spawn).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [] });
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0 });
   }
 
   removeBody(id: string) {
@@ -273,7 +313,8 @@ export class World {
 
   /** wait = steht in einem Wait · think = überlegt, die Welt wartet auf ihn · away = zu lange still, zählt nicht mit */
   private stateOf(b: Body, now: number): 'wait' | 'think' | 'away' | null {
-    if (b.waits > 0) return 'wait';
+    // solange der Körper einen Plan abarbeitet, hält der Geist die Welt nicht auf
+    if (b.waits > 0 || b.plan?.status === 'running') return 'wait';
     if (b.lastAct === 0) return b.driven ? 'think' : null;
     return now - b.lastAct < this.thinkTimeout * 1000 ? 'think' : b.driven || now - b.lastAct < 600_000 ? 'away' : null;
   }
@@ -287,14 +328,12 @@ export class World {
 
   // ---------- Befehle ----------
 
-  moveTo(id: string, position: unknown) {
-    const b = this.need(id);
-    b.target = asVec3(position, 'position');
+  private setTarget(b: Body, t: Vec3) {
+    b.target = t;
     b.move = 'moving';
     b.block = null;
     b.bestD = Infinity;
     b.stuck = 0;
-    return { ok: true, target: b.target };
   }
 
   jump(id: string) {
@@ -308,6 +347,8 @@ export class World {
 
   stop(id: string) {
     const b = this.need(id);
+    if (b.plan?.status === 'running') b.plan.status = 'cancelled';
+    b.auto = false;
     b.target = null;
     b.move = 'idle';
     b.block = null;
@@ -381,6 +422,7 @@ export class World {
     const t = String(text ?? '').slice(0, 500);
     if (!t) return { ok: false, error: 'text fehlt' };
     const msg = { time: r2(this.simTime), from: b.name, text: t };
+    this.onSay?.(id, t);
     this.chat.push(msg);
     if (this.chat.length > 50) this.chat.shift();
     b.heard.push(msg);
@@ -395,21 +437,333 @@ export class World {
       if (o.heard.length > 30) o.heard.shift();
       o.events.push({ time: msg.time, type: 'heard', from: b.name, text: t, distance: r2(dist) });
       heardBy.push(o.name);
-      this.interruptWaits(o);
+      this.interruptWaits(o, 'speech');
     }
     if (b.heard.length > 30) b.heard.shift();
     return { ok: true, heard_by: heardBy };
   }
 
-  /** Wer angesprochen wird, während er wartet, wird sofort geweckt. */
-  private interruptWaits(b: Body) {
+  /** Wer wartet, wird geweckt: jemand spricht ihn an, oder sein Plan ist fertig. */
+  private interruptWaits(b: Body, reason: string) {
     if (!b.waits) return;
     const mine = this.waiters.filter((w) => w.id === b.id);
     this.waiters = this.waiters.filter((w) => w.id !== b.id);
     b.waits = 0;
     b.lastAct = performance.now();
     this.released = true;
-    mine.forEach((w) => w.resolve(true));
+    mine.forEach((w) => w.resolve(reason));
+  }
+
+  // ---------- Pläne: der Körper handelt, der Geist überlegt ----------
+
+  /** Prüft einen Plan, bevor er den laufenden ersetzt. Wirft mit verständlicher Meldung. */
+  private checkSteps(raw: unknown): Step[] {
+    if (!Array.isArray(raw) || raw.length === 0) throw new Error('steps muss eine nicht-leere Liste von Schritten sein.');
+    if (raw.length > MAX_STEPS) throw new Error(`Höchstens ${MAX_STEPS} Schritte pro Plan.`);
+    return raw.map((s: any, i) => {
+      const at = `Schritt ${i + 1}`;
+      const type = String(s?.type || '').toLowerCase();
+      if (!(STEP_TYPES as readonly string[]).includes(type)) throw new Error(`${at}: unbekannter Typ "${s?.type}". Erlaubt: ${STEP_TYPES.join(', ')}.`);
+      const out: Step = { type };
+      // null zählt wie weggelassen (manche Modelle füllen optionale Felder damit)
+      if (s.position != null) out.position = asVec3(s.position, `${at}: position`);
+      if (s.direction != null) out.direction = asVec3(s.direction, `${at}: direction`);
+      if (s.rotation != null) out.rotation = asVec3(s.rotation, `${at}: rotation`);
+      for (const k of ['name', 'at', 'text'] as const) if (s[k] != null && s[k] !== '') out[k] = String(s[k]);
+      for (const k of ['seconds', 'radius', 'distance', 'speed'] as const) {
+        if (s[k] == null) continue;
+        const n = Number(s[k]);
+        if (!isFinite(n) || n < 0) throw new Error(`${at}: ${k} muss eine Zahl ≥ 0 sein.`);
+        out[k] = n;
+      }
+      const need = (ok: boolean, what: string) => { if (!ok) throw new Error(`${at} (${type}) braucht ${what}.`); };
+      if (type === 'goto' || type === 'look') need(!!(out.position || out.name), 'position oder name');
+      if (type === 'follow') need(!!out.name, 'name');
+      if (type === 'place') need(!!out.position, 'position');
+      if (type === 'throw') need(!!(out.direction || out.at || out.position), 'direction, at oder position');
+      if (type === 'say') need(!!out.text, 'text');
+      if (type === 'wait') need(out.seconds !== undefined, 'seconds');
+      return out;
+    });
+  }
+
+  /** Gibt dem Körper einen Plan. Kehrt sofort zurück; sofort mögliche Schritte sind dann schon erledigt. */
+  act(id: string, data: { intent?: unknown; steps?: unknown; append?: unknown }) {
+    const b = this.need(id);
+    const steps = this.checkSteps(data?.steps);
+    const intent = String(data?.intent ?? '').slice(0, 200);
+    if (data?.append && b.plan?.status === 'running') {
+      if (b.plan.steps.length - b.plan.idx + steps.length > MAX_STEPS) throw new Error(`Höchstens ${MAX_STEPS} offene Schritte.`);
+      b.plan.steps.push(...steps);
+      if (intent) b.plan.intent = intent;
+    } else {
+      if (b.plan?.status === 'running') b.plan.status = 'cancelled';
+      b.auto = false;
+      b.target = null;
+      b.move = 'idle';
+      b.plan = { id: this.nextPlanId++, intent, steps, idx: 0, status: 'running', sub: {} };
+      this.advance(b);
+    }
+    const plan = this.planInfo(b);
+    return plan?.status === 'failed' ? { ok: false, error: plan.error, plan } : { ok: true, plan };
+  }
+
+  private describe(s: Step): string {
+    const where = s.name ?? s.at ?? (s.position ? `[${s.position.join(', ')}]` : '');
+    return [s.type, where, s.text ? `"${s.text.slice(0, 40)}"` : '', s.seconds !== undefined ? `${s.seconds}s` : ''].filter(Boolean).join(' ');
+  }
+
+  private planInfo(b: Body) {
+    const p = b.plan;
+    if (!p) return null;
+    const cur = p.steps[Math.min(p.idx, p.steps.length - 1)];
+    return {
+      id: p.id, intent: p.intent, status: p.status,
+      step: Math.min(p.idx + 1, p.steps.length), of: p.steps.length,
+      current: this.describe(cur),
+      ...(p.error ? { error: p.error } : {}),
+    };
+  }
+
+  private finish(b: Body, status: 'done' | 'failed', error?: string) {
+    const p = b.plan!;
+    p.status = status;
+    if (error) p.error = error;
+    b.target = null;
+    if (b.move === 'moving' || b.move === 'blocked') b.move = 'idle';
+    b.idle = 0;
+    // im Wartemodus ist der Agent ab jetzt wieder am Zug: den laufenden Zeitschub hier beenden
+    this.released = true;
+    b.events.push({ time: r2(this.simTime), type: status === 'done' ? 'plan_done' : 'plan_failed', plan_id: p.id, intent: p.intent, ...(error ? { step: p.idx + 1, error } : {}) });
+    this.interruptWaits(b, status === 'done' ? 'plan_done' : 'plan_failed');
+  }
+
+  /** Arbeitet den Plan ab, solange Schritte sofort fertig werden. */
+  private advance(b: Body) {
+    for (let guard = 0; guard < MAX_STEPS + 1; guard++) {
+      const p = b.plan;
+      if (!p || p.status !== 'running') return;
+      const s = p.steps[p.idx];
+      if (!p.sub.t0 && p.sub.t0 !== 0) p.sub.t0 = this.simTime;
+      let r: 'done' | 'running' | { fail: string };
+      try { r = this.runStep(b, s, p.sub); } catch (e: any) { r = { fail: e?.message || String(e) }; }
+      if (r === 'running') return;
+      if (r !== 'done') return this.finish(b, 'failed', r.fail);
+      p.idx++;
+      p.sub = {};
+      if (p.idx >= p.steps.length) return this.finish(b, 'done');
+    }
+  }
+
+  /** Position eines benannten Dings: Objekt, Agent oder Plattform (Oberkante). */
+  private locate(name: string): Vec3 | null {
+    const n = name.toLowerCase();
+    const o = this.objs.find((x) => !x.lost && x.name.toLowerCase() === n);
+    if (o) {
+      const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;
+      return v3((holder ?? o).body.translation());
+    }
+    const other = [...this.bodies.values()].find((x) => x.name.toLowerCase() === n);
+    if (other) return v3(other.body.translation());
+    const st = STATICS.find((x) => x.name.toLowerCase() === n);
+    if (st) return [st.center[0], st.center[1] + st.size[1] / 2, st.center[2]];
+    return null;
+  }
+
+  /** Läuft zu pos, bis der waagrechte Abstand ≤ radius ist. Springt selbst über niedrige Hindernisse. */
+  private walkTo(b: Body, ws: Record<string, any>, pos: Vec3, radius: number): 'done' | 'running' | { fail: string } {
+    ws.t0 ??= this.simTime;
+    const p = b.body.translation();
+    const d = Math.hypot(pos[0] - p.x, pos[2] - p.z);
+    if (d <= radius) {
+      b.target = null;
+      b.move = 'arrived';
+      return 'done';
+    }
+    // bewegliche Ziele nachführen, ohne die Hinderniserkennung bei jedem Schritt zurückzusetzen
+    if (!b.target || Math.hypot(b.target[0] - pos[0], b.target[2] - pos[2]) > 0.5) {
+      const keep = b.target ? { bestD: b.bestD, stuck: b.stuck, move: b.move, block: b.block } : null;
+      this.setTarget(b, pos);
+      if (keep && keep.move === 'blocked') Object.assign(b, keep);
+    }
+    if (b.move === 'blocked') {
+      const h = b.block?.height_above_feet;
+      ws.jumps ??= 0;
+      if (b.grounded && ws.jumps < 3 && (h === undefined || h <= MAX_JUMP_UP)) {
+        this.jump(b.id);
+        ws.jumps++;
+        b.move = 'moving';
+        b.stuck = 0;
+        b.bestD = Infinity;
+      } else if (b.stuck > 2.5) {
+        return { fail: `Weg blockiert${b.block?.by ? ` von ${b.block.by}` : ''}${h !== undefined ? ` (${h} über deinen Füssen)` : ''}.` };
+      }
+    }
+    if (this.simTime - ws.t0 > 90) return { fail: 'Ziel nach 90 Sekunden nicht erreicht.' };
+    return 'running';
+  }
+
+  private runStep(b: Body, s: Step, st: Record<string, any>): 'done' | 'running' | { fail: string } {
+    const elapsed = this.simTime - st.t0;
+    const where = (key: 'name' | 'at' = 'name'): Vec3 | { fail: string } => {
+      const n = s[key];
+      if (n) return this.locate(n) ?? { fail: `"${n}" gibt es nicht (mehr).` };
+      return s.position!;
+    };
+    switch (s.type) {
+      case 'goto': {
+        const pos = where();
+        if (!Array.isArray(pos)) return pos;
+        return this.walkTo(b, st, pos, s.radius ?? (s.name ? 1.6 : 0.3));
+      }
+      case 'follow': {
+        if (elapsed >= (s.seconds ?? 20)) { b.target = null; return 'done'; }
+        const pos = where();
+        if (!Array.isArray(pos)) return pos;
+        st.ws ??= {};
+        const w = this.walkTo(b, st.ws, pos, s.distance ?? 2);
+        if (typeof w === 'object') return w;
+        if (w === 'done') { st.ws = {}; this.lookAt(b, pos); }
+        return 'running';
+      }
+      case 'pickup': {
+        if (b.holding) return { fail: `Du hältst bereits ${b.holding.name}.` };
+        let o: Obj | undefined;
+        if (s.name) o = this.objs.find((x) => !x.lost && x.name.toLowerCase() === s.name!.toLowerCase());
+        else {
+          const near = s.position ?? v3(b.body.translation());
+          let best = Infinity;
+          for (const x of this.objs) {
+            if (x.lost || x.heldBy) continue;
+            const t = x.body.translation();
+            const d = Math.hypot(t.x - near[0], t.y - near[1], t.z - near[2]);
+            if (d < best) { best = d; o = x; }
+          }
+        }
+        if (!o) return { fail: s.name ? `"${s.name}" gibt es nicht (mehr).` : 'Kein freies Objekt zu finden.' };
+        if (o.heldBy) return { fail: `${o.name} hält gerade ${this.bodies.get(o.heldBy)?.name ?? 'jemand'}.` };
+        const t = o.body.translation();
+        const p = b.body.translation();
+        if (Math.hypot(t.x - p.x, t.y - p.y, t.z - p.z) > REACH - 0.3) {
+          const w = this.walkTo(b, st, v3(t), REACH - 1.2);
+          if (w !== 'done') return w;
+        }
+        b.target = null;
+        const r = this.pickup(b.id, { name: o.name });
+        return r.ok ? 'done' : { fail: r.error! };
+      }
+      case 'place': {
+        if (!b.holding) return { fail: 'Du hältst nichts.' };
+        const pos = s.position!;
+        const p = b.body.translation();
+        if (Math.hypot(pos[0] - p.x, pos[1] - p.y, pos[2] - p.z) > REACH + 1) {
+          const w = this.walkTo(b, st, pos, REACH - 1);
+          if (w !== 'done') return w;
+        }
+        b.target = null;
+        const r = this.place(b.id, { position: pos, rotation: s.rotation });
+        return r.ok ? 'done' : { fail: r.error! };
+      }
+      case 'throw': {
+        if (!b.holding) return { fail: 'Du hältst nichts.' };
+        let dir = s.direction;
+        let speed = s.speed;
+        if (!dir) {
+          const tgt = where('at');
+          if (!Array.isArray(tgt)) return tgt;
+          const p = b.body.translation();
+          const dx = tgt[0] - p.x, dz = tgt[2] - p.z;
+          const h = Math.max(0.5, Math.hypot(dx, dz));
+          // flacher Bogen (rund 27°); Tempo so, dass er etwa dort landet
+          dir = [dx, h * 0.5 + Math.max(0, tgt[1] - p.y), dz];
+          speed ??= Math.min(MAX_THROW, Math.sqrt(h * -GRAVITY * 1.25) + 0.5);
+          this.lookAt(b, tgt);
+        }
+        const r = this.throwObj(b.id, { direction: dir, speed: speed ?? 12 });
+        return r.ok ? 'done' : { fail: r.error! };
+      }
+      case 'jump': {
+        if (b.grounded) { this.jump(b.id); return 'done'; }
+        return elapsed > 2 ? { fail: 'Nicht am Boden – Springen geht nur mit Bodenkontakt.' } : 'running';
+      }
+      case 'say': {
+        const r = this.say(b.id, s.text);
+        return r.ok ? 'done' : { fail: r.error! };
+      }
+      case 'look': {
+        const pos = where();
+        if (!Array.isArray(pos)) return pos;
+        this.lookAt(b, pos);
+        return 'done';
+      }
+      case 'wait':
+        return elapsed >= Math.min(60, s.seconds!) ? 'done' : 'running';
+      case 'wander': {
+        if (elapsed >= (s.seconds ?? 20)) { b.target = null; return 'done'; }
+        st.center ??= v3(b.body.translation());
+        if (st.pauseUntil > this.simTime) return 'running';
+        if (!st.goal) {
+          const r = s.radius ?? 6;
+          const a = Math.random() * Math.PI * 2;
+          const d = r * Math.sqrt(Math.random());
+          const g: Vec3 = [clampIsland(st.center[0] + Math.cos(a) * d, 42), st.center[1], clampIsland(st.center[2] + Math.sin(a) * d, 32)];
+          if (!this.safeGround(b, g[0], g[2])) return 'running'; // nächsten Physikschritt neu würfeln
+          st.goal = g;
+          st.ws = {};
+        }
+        const w = this.walkTo(b, st.ws, st.goal, 0.5);
+        if (w !== 'running') { st.goal = null; b.target = null; st.pauseUntil = this.simTime + 0.5 + Math.random() * 2; }
+        return 'running';
+      }
+    }
+    return { fail: `Unbekannter Schritt: ${s.type}` };
+  }
+
+  /** Liegt bei (x, z) Boden auf etwa gleicher Höhe wie die Füsse – und auf dem Weg dorthin keine Kante? */
+  private safeGround(b: Body, x: number, z: number): boolean {
+    const p = b.body.translation();
+    const feet = p.y - P_FOOT;
+    const n = Math.max(1, Math.ceil(Math.hypot(x - p.x, z - p.z) / 0.5));
+    for (let i = 1; i <= n; i++) {
+      const sx = p.x + ((x - p.x) * i) / n, sz = p.z + ((z - p.z) * i) / n;
+      const hit = this.rw.castRay(new RAPIER.Ray({ x: sx, y: feet + 0.6, z: sz }, { x: 0, y: -1, z: 0 }), 1.2, true, undefined, undefined, undefined, b.body);
+      if (!hit || Math.abs(feet + 0.6 - hit.timeOfImpact - feet) > 0.4) return false;
+    }
+    return true;
+  }
+
+  private lookAt(b: Body, pos: Vec3) {
+    const p = b.body.translation();
+    if (Math.hypot(pos[0] - p.x, pos[2] - p.z) > 0.05) b.lookYaw = Math.atan2(pos[0] - p.x, pos[2] - p.z);
+  }
+
+  /** Ohne Plan steht der Körper nicht steif da: er schaut sich um und schlendert ab und zu. */
+  private idleBody(b: Body) {
+    b.idle += DT;
+    if (b.auto) {
+      if (!b.target || b.move === 'blocked') { b.auto = false; b.target = null; b.move = 'idle'; }
+      return;
+    }
+    if (b.target || this.simTime < b.nextLook) return;
+    b.nextLook = this.simTime + 2 + Math.random() * 4;
+    const p = b.body.translation();
+    let near: Body | null = null;
+    let best = 10;
+    for (const o of this.bodies.values()) {
+      if (o === b) continue;
+      const q = o.body.translation();
+      const d = Math.hypot(q.x - p.x, q.z - p.z);
+      if (d < best) { best = d; near = o; }
+    }
+    const a = Math.random() * Math.PI * 2;
+    const d = 1.5 + Math.random() * 2;
+    const goal: Vec3 = [clampIsland(p.x + Math.cos(a) * d, 42), p.y, clampIsland(p.z + Math.sin(a) * d, 32)];
+    if (b.idle > 12 && b.grounded && Math.random() < 0.35 && this.safeGround(b, goal[0], goal[2])) {
+      this.setTarget(b, goal);
+      b.auto = true;
+      b.idle = 4;
+    } else if (near && Math.random() < 0.6) this.lookAt(b, v3(near.body.translation()));
+    else b.lookYaw = b.yaw + (Math.random() - 0.5) * 2.4;
   }
 
   private release(b: Body, pos: Vec3, rot: { x: number; y: number; z: number; w: number } | null, vel: Vec3) {
@@ -444,7 +798,11 @@ export class World {
   }
 
   private step() {
-    for (const b of this.bodies.values()) this.driveBody(b);
+    for (const b of this.bodies.values()) {
+      if (b.plan?.status === 'running') this.advance(b);
+      else this.idleBody(b);
+      this.driveBody(b);
+    }
     for (const o of this.objs) if (!o.heldBy && !o.lost) o.prevVel = v3(o.body.linvel());
     this.rw.step();
     this.simTime += DT;
@@ -466,6 +824,7 @@ export class World {
     }
     for (const b of this.bodies.values()) {
       if (b.body.translation().y < -15) {
+        if (b.plan?.status === 'running') this.finish(b, 'failed', 'Von der Insel gefallen.');
         this.respawn(b);
         b.events.push({ time: r2(this.simTime), type: 'fell_off_world', respawned_at: b.spawn });
       }
@@ -516,11 +875,17 @@ export class World {
             b.events.push({ time: r2(this.simTime), type: 'blocked', ...b.block });
           }
         }
-        const s = Math.min(WALK_SPEED, d / DT);
+        const s = Math.min(b.auto ? WALK_SPEED * 0.35 : WALK_SPEED, d / DT);
         vx = (dx / d) * s;
         vz = (dz / d) * s;
-        b.yaw = Math.atan2(dx, dz);
+        b.lookYaw = Math.atan2(dx, dz);
       }
+    }
+    // drehen mit begrenzter Geschwindigkeit statt schlagartig
+    if (b.lookYaw !== null) {
+      const diff = wrapAngle(b.lookYaw - b.yaw);
+      const max = TURN_SPEED * DT;
+      b.yaw = wrapAngle(b.yaw + Math.max(-max, Math.min(max, diff)));
     }
     b.body.setLinvel({ x: vx, y: v.y, z: vz }, true);
   }
@@ -583,6 +948,8 @@ export class World {
   reset() {
     for (const b of this.bodies.values()) {
       b.holding = null;
+      if (b.plan?.status === 'running') b.plan.status = 'cancelled';
+      b.auto = false;
       this.respawn(b);
       b.events.push({ time: r2(this.simTime), type: 'world_reset' });
     }
@@ -615,8 +982,8 @@ export class World {
   }
 
   /** Wartet eine Spanne in Simulationszeit (läuft bei Pause nicht weiter). */
-  /** Liefert true, wenn das Warten vorzeitig endete, weil jemand in Hörweite gesprochen hat. */
-  waitSim(seconds: number, id?: string): Promise<boolean> {
+  /** Liefert den Grund, wenn das Warten vorzeitig endete (speech, plan_done, plan_failed), sonst false. */
+  waitSim(seconds: number, id?: string): Promise<string | false> {
     const b = id ? this.bodies.get(id) : undefined;
     if (b) b.waits++;
     return new Promise((resolve) => this.waiters.push({ until: this.simTime + seconds, resolve, id: b ? id : undefined }));
@@ -673,6 +1040,8 @@ export class World {
         holding: b.holding?.name ?? null,
         move_target: b.target,
         move: { status: b.move, ...(b.target ? { target: b.target } : {}), ...(b.block || {}) },
+        plan: this.planInfo(b),
+        ...(b.auto ? { autopilot: 'schlendert ein paar Schritte' } : {}),
       },
       events: b.events.splice(0),
       chat: b.heard.slice(-10),
@@ -685,7 +1054,7 @@ export class World {
     const now = performance.now();
     const agents = [...this.bodies.values()].map((b) => {
       const p = b.body.translation();
-      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded };
+      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
     });
     const objs = this.objs.filter((o) => !o.lost).map((o) => {
       const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;

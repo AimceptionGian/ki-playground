@@ -124,6 +124,19 @@ Agent anklicken, das Panel öffnet sich.
 - **Verbindung**: Token, `curl`-Beispiel und der fertige Befehl, um den Körper als MCP-Server in Claude Code einzubinden.
 - Das Panel lässt sich an der Kopfzeile **verschieben** und an der Ecke unten rechts in der Grösse ändern. Doppelklick auf die Kopfzeile oder ⇥ dockt es wieder rechts an.
 
+## Körper und Geist
+
+Der Körper handelt selbst, das Modell sagt ihm nur, *was* er tun soll. Mit `Act` schickt das Modell einen Plan
+aus bis zu 20 Schritten (`goto`, `follow`, `pickup`, `place`, `throw`, `jump`, `say`, `look`, `wait`, `wander`).
+Der Aufruf kehrt sofort zurück. Der Server arbeitet den Plan in jedem Physikschritt ab, während das Modell weiterdenkt.
+
+- **Reflexe:** Der Körper läuft zu Objekten hin, bevor er sie aufhebt oder etwas absetzt. Er springt selbst über Kanten bis rund 2.3 über den Füssen und zielt beim Werfen auf ein benanntes Ziel.
+- **Wecken:** Ein `Wait` endet, sobald der Plan fertig ist oder scheitert (`interrupted_by: plan_done | plan_failed`), oder wenn jemand in Hörweite spricht.
+- **Leerlauf:** Ohne Plan schaut sich der Körper um, dreht sich zu anderen und schlendert ab und zu ein paar Schritte.
+- **Alte Befehle** (`MoveTo`, `Pickup`, `Place`, `Throw`, `Jump`) sind Pläne mit einem Schritt und bekommen dieselben Reflexe.
+- Die Absicht des laufenden Plans steht in der Agentenliste unter dem Namen.
+- Im Wartemodus hält ein Agent die Welt nicht auf, solange sein Körper einen Plan abarbeitet.
+
 ## Wartemodus
 
 In Echtzeit läuft die Welt weiter, während ein Modell überlegt. Ein langsames Modell verliert dadurch Weltzeit,
@@ -158,7 +171,7 @@ Der Preis: Die Welt bewegt sich in Schüben statt fliessend, und der langsamste 
 
 | Datei | Inhalt |
 |---|---|
-| `server/world.ts` | Insel, Physik (Rapier), die Befehle MoveTo, Jump, Stop, Pickup, Place, Throw |
+| `server/world.ts` | Insel, Physik (Rapier), Pläne und Reflexe des Körpers, Leerlauf, die Befehle MoveTo, Jump, Stop, Pickup, Place, Throw |
 | `server/agents.ts` | Agenten, Tokens, Arbeitsordner, Erkennen von Dateiänderungen |
 | `server/templates.ts` | Startdateien neuer Agenten (`SOUL.md` usw.) und `API.md` |
 | `server/tools.ts` | eine Werkzeugliste für HTTP-API, MCP und den eingebauten Loop |
