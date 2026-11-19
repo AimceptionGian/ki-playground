@@ -75,7 +75,7 @@ const STEPS = `| Schritt | Felder | was der Körper tut |
 | \`place\` | \`position\`, \`rotation\` in Grad optional | läuft hin, falls nötig, und setzt das Gehaltene ab |
 | \`throw\` | \`at\` (Name), \`position\` (Ziel) oder \`direction\`, \`speed\` optional | zielt und wirft |
 | \`jump\` | – | springt |
-| \`say\` | \`text\` | spricht; hörbar für alle in Hörweite |
+| \`say\` | \`text\`, \`interrupt\` optional | spricht; hörbar für alle in Hörweite (redet schon jemand, schweigt er) |
 | \`look\` | \`name\` oder \`position\` | dreht sich dorthin |
 | \`wait\` | \`seconds\` (höchstens 60) | hält inne |
 | \`wander\` | \`radius\` (6), \`seconds\` (20) | schlendert in der Gegend herum |
@@ -87,6 +87,13 @@ const PLAN_NOTES = `- Ein neuer Plan ersetzt den laufenden. Mit \`"append": true
 - \`self.plan\` in jeder Beobachtung zeigt Absicht, Schritt, Stand (\`running\`, \`done\`, \`failed\`, \`cancelled\`) und bei einem Fehler den Grund.
 - Ist ein Plan fertig oder gescheitert, steht das in \`events\` (\`plan_done\`, \`plan_failed\`).
 - Ohne Plan steht dein Körper nicht steif herum: er schaut sich um und macht ab und zu ein paar Schritte (\`self.autopilot\`).`;
+
+const TALK = `### Reden
+
+Wer zuerst spricht, hat das Wort. Spricht in deiner Hörweite gerade jemand (\`speaking\` bei den anderen in \`entities\`),
+schweigst du: \`say\` antwortet dann mit \`stopped\`, ein \`say\`-Schritt in einem Plan fällt weg (Event \`kept_silent\`), der Rest des Plans läuft weiter.
+Willst du trotzdem reden, fällst du ihm bewusst ins Wort: \`interrupt: true\` (bei \`say\` oder im \`say\`-Schritt).
+Dann verstummt der andere und erfährt es (Event \`interrupted\`); andere hören, dass du unterbrochen hast (\`interrupting\`).`;
 
 const needsAndLife = (n: Names) => `### Bedürfnisse
 
@@ -167,9 +174,11 @@ ${PLAN_NOTES}
 | Place | \`{"position": [x, y, z], "rotation": [rx, ry, rz]}\` |
 | Throw | \`{"direction": [x, y, z], "speed": n}\` |
 | Jump, Stop | \`{}\` – Stop bricht auch den Plan ab |
-| Say | \`{"text": "..."}\` – die Antwort nennt, wer es gehört hat |
+| Say | \`{"text": "...", "interrupt": false}\` – die Antwort nennt, wer es gehört hat; siehe „Reden" |
 | Wait | \`{"seconds": n}\` – höchstens 30; endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert (\`interrupted_by\`) |
 | Reproduce | \`{"name": "..."}\` – ein Kind bekommen, siehe „Leben" |
+
+${TALK}
 
 ${needsAndLife({ act: 'Act', wait: 'Wait', reproduce: 'Reproduce' })}
 `;
@@ -196,6 +205,8 @@ ${STEPS}
 
 ${PLAN_NOTES}
 - \`wait\` (höchstens 30 s) endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert (\`interrupted_by\`).
+
+${TALK}
 
 ${needsAndLife({ act: 'act', wait: 'wait', reproduce: 'reproduce' })}
 

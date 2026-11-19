@@ -86,10 +86,12 @@ setInterval(() => store.scan(), 1000);
 runners.onChange = () => broadcast({ t: 'agents' });
 store.onUsage = (id, usage) => broadcast({ t: 'usage', id, usage });
 world.onReset = () => broadcast({ t: 'reset' });
-world.onSay = (id, text) => {
+world.onSay = (id, text, seq) => {
   store.log(id, world.simTime, 'say', text.slice(0, 500));
-  voices.say(id, text, world.stageOf_(id), (s) => broadcast({ t: 'voice', id, ...s }));
+  // abgebrochene Äusserungen (ins Wort gefallen) nicht mehr abspielen, auch wenn Piper erst danach fertig wird
+  voices.say(id, text, world.stageOf_(id), (s) => { if (!world.speechCut(id, seq)) broadcast({ t: 'voice', id, seq, ...s }); });
 };
+world.onHush = (id, seq) => broadcast({ t: 'hush', id, seq });
 
 let last = performance.now();
 let frame = 0;

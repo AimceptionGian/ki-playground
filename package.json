@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
-    "test:moves": "tsx tests/moves.ts"
+    "test:moves": "tsx tests/moves.ts",
+    "test:speech": "tsx tests/speech.ts",
+    "test": "tsx tests/moves.ts && tsx tests/speech.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

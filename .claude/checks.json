@@ -5,8 +5,8 @@
       "command": "npx tsc --noEmit"
     },
     {
-      "name": "Bewegung",
-      "command": "npm run test:moves --silent"
+      "name": "Tests (Bewegung, Reden)",
+      "command": "npm test --silent"
     }
   ],
   "maxBlocks": 3

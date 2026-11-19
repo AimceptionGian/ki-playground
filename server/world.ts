@@ -53,6 +53,8 @@ interface Body {
   nextLook: number; // Weltzeit, zu der er sich im Leerlauf wieder umschaut
   needs: Needs;
   urgent: { hunger: boolean; thirst: boolean; energy: boolean }; // schon als dringend gemeldet
+  speaking: { seq: number; until: number; text: string } | null; // spricht gerade (Weltzeit bis zum Ende)
+  cutSeq: number; // höchste eigene Äusserung, die abgebrochen wurde (deren Ton nicht mehr abspielen)
   asleep: boolean; // schlief im letzten Physikschritt (für die Events fell_asleep/woke_up)
   wake: string | null; // Grund, warum der laufende Schlaf endet
   cheer: number; // kurzer Freudenschub durch Reden und Spielen, klingt ab
@@ -100,6 +102,7 @@ export interface Step {
   direction?: Vec3;
   speed?: number;
   rotation?: Vec3;
+  interrupt?: boolean; // say: absichtlich jemandem ins Wort fallen
 }
 
 interface Plan {
@@ -144,6 +147,7 @@ const STAGE_WORD: Record<Stage, string> = { child: 'Kind', adult: 'erwachsen', o
 const TURN_SPEED = 9; // rad/s
 const ACCEL = 28; // m/s² beim Anlaufen
 const DECEL = 40; // m/s² beim Abbremsen
+const SPEECH_CHARS_PER_S = 14; // so schnell sprechen die Stimmen etwa
 const AIR_ACCEL = 14; // m/s² Steuerung in der Luft (Richtung Ziel)
 const MAX_JUMP_UP = 2.3; // so hoch kommt ein Sprung über die Füsse
 
@@ -245,7 +249,9 @@ export class World {
   /** Ein Agent ist gestorben; sein Körper ist schon entfernt. */
   onDeath: ((id: string, info: { name: string; cause: string; age_min: number }) => void) | null = null;
   /** Jemand hat etwas gesagt (auch aus einem Plan heraus). */
-  onSay: ((id: string, text: string) => void) | null = null;
+  onSay: ((id: string, text: string, seq: number) => void) | null = null;
+  onHush: ((id: string, seq: number) => void) | null = null; // Äusserung abgebrochen: Ton anhalten
+  private speechSeq = 0;
 
   static async create(): Promise<World> {
     await RAPIER.init();
@@ -357,7 +363,7 @@ export class World {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...(opts.pos ?? spawn)).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, mv: [0, 0], bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1, energy: 0.9 }, urgent: { hunger: false, thirst: false, energy: false }, asleep: false, wake: null, cheer: 0, autoCool: 0, healthLow: false, grief: 0,
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, mv: [0, 0], bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1, energy: 0.9 }, urgent: { hunger: false, thirst: false, energy: false }, speaking: null, cutSeq: 0, asleep: false, wake: null, cheer: 0, autoCool: 0, healthLow: false, grief: 0,
       age: 0, lifeFactor: opts.lifeFactor ?? 1, parents: opts.parents ?? [], stage: 'adult', offer: null, nextBirthAge: opts.nextBirthAge ?? 0, dead: null });
     const b = this.bodies.get(id)!;
     b.age = opts.age ?? FOUNDER_AGE * this.lifespan(b);
@@ -635,12 +641,61 @@ export class World {
     return { ok: true, thrown: o.name, speed };
   }
 
-  say(id: string, text: unknown) {
+  /** Wie lange eine Äusserung dauert (Weltzeit), grob nach der Sprechgeschwindigkeit der Stimmen. */
+  private speechSeconds(text: string): number {
+    return 0.5 + text.length / SPEECH_CHARS_PER_S;
+  }
+
+  /** Spricht in b's Hörweite gerade jemand anderes? */
+  private speakerNear(b: Body): Body | null {
+    const p = b.body.translation();
+    for (const o of this.bodies.values()) {
+      if (o === b || !o.speaking || o.speaking.until <= this.simTime) continue;
+      const q = o.body.translation();
+      if (this.hearRange > 0 && Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z) > this.hearRange) continue;
+      return o;
+    }
+    return null;
+  }
+
+  /** Bricht die laufende Äusserung von b ab (Ton anhalten). */
+  private cutSpeech(b: Body) {
+    if (!b.speaking) return;
+    b.cutSeq = Math.max(b.cutSeq, b.speaking.seq);
+    this.onHush?.(b.id, b.speaking.seq);
+    b.speaking = null;
+  }
+
+  /** Wurde diese Äusserung abgebrochen? (dann ihren Ton nicht mehr abspielen) */
+  speechCut(id: string, seq: number): boolean {
+    const b = this.bodies.get(id);
+    return !b || seq <= b.cutSeq;
+  }
+
+  /**
+   * Sprechen. Redet in Hörweite schon jemand, schweigt man (Antwort `stopped`) – ausser man fällt ihm
+   * mit `interrupt` absichtlich ins Wort; dann verstummt der andere.
+   */
+  say(id: string, text: unknown, interrupt = false) {
     const b = this.need(id);
     const t = String(text ?? '').slice(0, 500);
     if (!t) return { ok: false, error: 'text fehlt' };
-    const msg = { time: r2(this.simTime), from: b.name, text: t };
-    this.onSay?.(id, t);
+    const other = this.speakerNear(b);
+    if (other && !interrupt) {
+      return {
+        ok: false, stopped: true, speaking: other.name, remaining_s: r2(other.speaking!.until - this.simTime),
+        error: `${other.name} spricht gerade ("${other.speaking!.text.slice(0, 80)}"); du hast geschwiegen. ${other.name} spricht noch etwa ${Math.ceil(other.speaking!.until - this.simTime)} s. Warte, bis ${other.name} fertig ist, oder fall ins Wort mit interrupt: true.`,
+      };
+    }
+    if (other) {
+      this.cutSpeech(other);
+      other.events.push({ time: r2(this.simTime), type: 'interrupted', by: b.name, text: t });
+    }
+    this.cutSpeech(b); // wer selbst noch redet und neu ansetzt, bricht den alten Satz ab
+    const seq = ++this.speechSeq;
+    b.speaking = { seq, until: this.simTime + this.speechSeconds(t), text: t };
+    const msg = { time: r2(this.simTime), from: b.name, text: t, ...(other ? { interrupting: other.name } : {}) };
+    this.onSay?.(id, t, seq);
     this.chat.push(msg);
     if (this.chat.length > 50) this.chat.shift();
     b.heard.push(msg);
@@ -654,13 +709,13 @@ export class World {
       if (this.hearRange > 0 && dist > this.hearRange) continue;
       o.heard.push(msg);
       if (o.heard.length > 30) o.heard.shift();
-      o.events.push({ time: msg.time, type: 'heard', from: b.name, text: t, distance: r2(dist) });
+      o.events.push({ time: msg.time, type: 'heard', from: b.name, text: t, distance: r2(dist), ...(other ? { interrupting: other.name } : {}) });
       heardBy.push(o.name);
       this.social(o);
       this.interruptWaits(o, 'speech');
     }
     if (b.heard.length > 30) b.heard.shift();
-    return { ok: true, heard_by: heardBy };
+    return { ok: true, heard_by: heardBy, ...(other ? { interrupted: other.name } : {}) };
   }
 
   /** Wer wartet, wird geweckt: jemand spricht ihn an, oder sein Plan ist fertig. */
@@ -690,6 +745,7 @@ export class World {
       if (s.direction != null) out.direction = asVec3(s.direction, `${at}: direction`);
       if (s.rotation != null) out.rotation = asVec3(s.rotation, `${at}: rotation`);
       for (const k of ['name', 'at', 'text'] as const) if (s[k] != null && s[k] !== '') out[k] = String(s[k]);
+      if (s.interrupt === true) out.interrupt = true;
       for (const k of ['seconds', 'radius', 'distance', 'speed'] as const) {
         if (s[k] == null) continue;
         const n = Number(s[k]);
@@ -929,7 +985,12 @@ export class World {
         return elapsed > 2 ? { fail: 'Nicht am Boden – Springen geht nur mit Bodenkontakt.' } : 'running';
       }
       case 'say': {
-        const r = this.say(b.id, s.text);
+        const r: { ok: boolean; error?: string; stopped?: boolean; speaking?: string; remaining_s?: number } = this.say(b.id, s.text, !!s.interrupt);
+        if (r.stopped) {
+          // jemand war zuerst: der Körper schweigt, der Plan geht weiter, der Geist erfährt es
+          b.events.push({ time: r2(this.simTime), type: 'kept_silent', because: r.speaking, remaining_s: r.remaining_s, text: s.text });
+          return 'done';
+        }
         return r.ok ? 'done' : { fail: r.error! };
       }
       case 'look': {
@@ -1513,7 +1574,7 @@ export class World {
       entities.push({
         name: other.name, entity_type: 'agent', shape: 'capsule', anchored: false,
         position: rv3(other.body.translation()), size: [P_RAD * 2, (P_HALF + P_RAD) * 2, P_RAD * 2],
-        color: other.color, holding: other.holding?.name ?? null, stage: other.stage, ...(this.sleeping(other) ? { sleeping: true } : {}),
+        color: other.color, holding: other.holding?.name ?? null, stage: other.stage, ...(this.sleeping(other) ? { sleeping: true } : {}), ...(other.speaking && other.speaking.until > this.simTime ? { speaking: true } : {}),
       });
     }
     return {

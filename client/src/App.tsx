@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Scene, type Snap } from './scene';
 import { AgentPanel } from './AgentPanel';
-import { playVoice } from './voice';
+import { playVoice, hushVoice } from './voice';
 import { Bubbles, Notes, type Note } from './Overlays';
 
 export interface AgentInfo {
@@ -140,7 +140,8 @@ export function App() {
           if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states, intents, needs, life }); }
         } else if (m.t === 'agents') load().catch(() => {});
         else if (m.t === 'death') { setInfo(`✝ ${m.name} ist gestorben (${m.cause}, ${Math.round(m.age_min)} min alt)`); setTimeout(() => setInfo(''), 8000); }
-        else if (m.t === 'voice') playVoice(scene.current, m.id, m.url, m.rate);
+        else if (m.t === 'voice') playVoice(scene.current, m.id, m.url, m.rate, m.seq);
+        else if (m.t === 'hush') hushVoice(m.id, m.seq);
         else if (m.t === 'log') logSubs.current.forEach((f) => f(m.id, m.entry));
         else if (m.t === 'usage') setAgents((list) => list.map((a) => (a.id === m.id ? { ...a, usage: m.usage } : a)));
         else if (m.t === 'note') noteSubs.current.forEach((f) => f(m));

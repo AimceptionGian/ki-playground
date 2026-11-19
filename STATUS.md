@@ -47,7 +47,14 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
   (0/9 Stufen geschafft). Fix: Luftsteuerung Richtung Ziel (`AIR_ACCEL`), Reflex „Stufe voraus → im Lauf abspringen"
   (`stepAhead`), Reflex „Kante voraus und Ziel höher → abspringen" (`edgeAhead`, z. B. Lücke EastStep→EastMesa).
   Prüfskript im Scratchpad (`jumps.mts`): 11/11 inkl. flach/hinunter ohne Sprung; Stufen in ~1.7 s statt 2.4 s
-- Offen: C langlebiger Prozess gegen ~2.7 s Neustart; Bewegungs-Prüfskript ins Projekt übernehmen (bisher keine Teststelle)
+- Erledigt: Tests im Projekt: `npm test` (= `tests/moves.ts` + `tests/speech.ts`), auch in `.claude/checks.json`
+- Erledigt: Reden nacheinander. Wer zuerst spricht, hat das Wort (Dauer ≈ 0.5 s + Zeichen/14); in Hörweite eines
+  Sprechenden schweigt man (`say` → `stopped` mit `remaining_s`; say-Schritt → Event `kept_silent`, Plan läuft weiter).
+  Reinreden nur bewusst mit `interrupt: true`: der andere verstummt (Event `interrupted`, Ton per `{t:'hush'}` angehalten,
+  noch nicht erzeugter Ton wird verworfen). Echter Lauf (Uno/Duo, 2 min): kein Durcheinander, keiner hat reingeredet
+- Offen: Gesprächsrhythmus. `heard` kommt am Anfang einer Äusserung → Zuhörer antwortet, während der andere noch spricht
+  (9 Abweisungen in 2 min, Pausen bis 16 s). Idee: `heard` erst am Ende der Äusserung zustellen/wecken
+- Offen: C langlebiger Prozess gegen ~2.7 s Neustart
 
 ## Nächster Schritt
 1. Browser-Test (siehe „Ungeprüft") mit zwei Agenten durchführen; Fehler beheben. Danach Nebenpunkte aus „Offen"
@@ -59,5 +66,6 @@ Empfohlenes Modell: sonnet (Testen und kleine Korrekturen)
 - Dateien haben CRLF: Patch-Skripte müssen `\r\n` normalisieren (Edit-Tool geht)
 - Testserver nur per PID beenden; Auto-Mode-Classifier blockiert Stop-Process/Headless-Browser → Gian bitten
 - Unter Windows wirft `proc.kill('SIGCONT'/'SIGSTOP')`; Pause von Claude-Runnern wirkt nicht – Nebenbefund
-- Prüfungen: `.claude/checks.json` (nur Typecheck); Testskripte nur im Scratchpad, `.mts` mit `file:///`-Import
+- Prüfungen: `.claude/checks.json` (Typecheck + `npm test`); Wegwerf-Skripte im Scratchpad (`.mts` mit `file:///`-Import),
+  dauerhafte Tests in `tests/` (laufen ohne Server direkt gegen `World`)
 - Heredocs mit Umlauten in Git Bash fragil: Skriptdatei nutzen

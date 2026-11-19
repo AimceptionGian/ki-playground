@@ -33,6 +33,7 @@ export const TOOLS: ToolDef[] = [
               position: vec, name: { type: 'string' }, at: { type: 'string' }, text: { type: 'string' },
               seconds: { type: 'number' }, radius: { type: 'number' }, distance: { type: 'number' },
               direction: vec, speed: { type: 'number' }, rotation: vec,
+              interrupt: { type: 'boolean', description: 'say: absichtlich jemandem ins Wort fallen' },
             },
             required: ['type'],
           },
@@ -47,7 +48,7 @@ export const TOOLS: ToolDef[] = [
   { name: 'pickup', description: 'Nimm ein Objekt auf: das nächste zur Position oder das mit dem Namen. Ist es weiter weg, läufst du erst hin.', parameters: { type: 'object', properties: { position: vec, name: { type: 'string' } } } },
   { name: 'place', description: 'Setz das gehaltene Objekt an eine Position; ist sie weiter weg, läufst du erst hin. rotation in Grad [rx, ry, rz], optional.', parameters: { type: 'object', properties: { position: vec, rotation: vec }, required: ['position'] } },
   { name: 'throw', description: 'Wirf das gehaltene Objekt in eine Richtung [x, y, z] mit einer Geschwindigkeit.', parameters: { type: 'object', properties: { direction: vec, speed: { type: 'number' } }, required: ['direction', 'speed'] } },
-  { name: 'say', description: 'Sag etwas. Wer in Hörweite ist, hört es.', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+  { name: 'say', description: 'Sag etwas. Wer in Hörweite ist, hört es. Spricht gerade jemand in deiner Nähe, schweigst du (stopped) – ausser du fällst ihm absichtlich ins Wort (interrupt: true).', parameters: { type: 'object', properties: { text: { type: 'string' }, interrupt: { type: 'boolean' } }, required: ['text'] } },
   { name: 'wait', description: 'Warte einige Sekunden Weltzeit (höchstens 30) und beobachte dich danach. Endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert.', parameters: { type: 'object', properties: { seconds: { type: 'number' } }, required: ['seconds'] } },
   { name: 'reproduce', description: 'Bekomm ein Kind mit jemandem, der nah bei dir steht (höchstens 4 Einheiten). Beide müssen es wollen: Beide rufen reproduce mit dem Namen des anderen auf, innerhalb von 60 Sekunden. Beide müssen erwachsen, froh genug und nicht hungrig oder durstig sein.', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   { name: 'list_files', description: 'Liste die Dateien in deinem Arbeitsordner.', parameters: { type: 'object', properties: {} }, files: true },
@@ -92,7 +93,7 @@ export async function runTool(world: World, store: AgentStore, agent: Agent, nam
       }
       case 'place': result = world.act(agent.id, { steps: [{ type: 'place', position: args.position, rotation: args.rotation }] }); break;
       case 'stop': result = world.stop(agent.id); break;
-      case 'say': result = world.say(agent.id, args.text); break;
+      case 'say': result = world.say(agent.id, args.text, args.interrupt === true); break;
       case 'reproduce': result = world.reproduce(agent.id, args); break;
       case 'wait': {
         const s = Math.max(0, Math.min(30, Number(args.seconds) || 0));
