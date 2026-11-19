@@ -41,6 +41,7 @@ interface Body {
   driven: boolean; // wird vom Server angetrieben (Runner läuft)
   move: 'idle' | 'moving' | 'arrived' | 'blocked';
   block: { by: string | null; obstacle_top_y?: number; height_above_feet?: number } | null;
+  mv: [number, number]; // aktuelle Bodengeschwindigkeit (Beschleunigen/Abbremsen)
   bestD: number; // kleinster bisher erreichter Abstand zum Ziel
   stuck: number; // Sekunden ohne Fortschritt am Boden
   events: Record<string, unknown>[]; // was seit der letzten Beobachtung passiert ist
@@ -130,6 +131,8 @@ const OFFER_TIME = 60; // so lange gilt ein Angebot zur Fortpflanzung
 const MATE_RANGE = 4;
 const STAGE_WORD: Record<Stage, string> = { child: 'Kind', adult: 'erwachsen', old: 'alt' };
 const TURN_SPEED = 9; // rad/s
+const ACCEL = 28; // m/s² beim Anlaufen
+const DECEL = 40; // m/s² beim Abbremsen
 const MAX_JUMP_UP = 2.3; // so hoch kommt ein Sprung über die Füsse
 
 const DT = 1 / 60;
@@ -342,7 +345,7 @@ export class World {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...(opts.pos ?? spawn)).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1 }, urgent: { hunger: false, thirst: false }, cheer: 0, autoCool: 0, healthLow: false, grief: 0,
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, mv: [0, 0], bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1 }, urgent: { hunger: false, thirst: false }, cheer: 0, autoCool: 0, healthLow: false, grief: 0,
       age: 0, lifeFactor: opts.lifeFactor ?? 1, parents: opts.parents ?? [], stage: 'adult', offer: null, nextBirthAge: opts.nextBirthAge ?? 0, dead: null });
     const b = this.bodies.get(id)!;
     b.age = opts.age ?? FOUNDER_AGE * this.lifespan(b);
@@ -1189,8 +1192,8 @@ export class World {
     const p = b.body.translation();
     const v = b.body.linvel();
     b.grounded = v.y <= 0.5 && this.groundBelow(b);
-    let vx = b.grounded ? 0 : v.x;
-    let vz = b.grounded ? 0 : v.z;
+    let vx = 0, vz = 0; // Wunschgeschwindigkeit am Boden
+    let arrived = false;
     if (b.target) {
       const dx = b.target[0] - p.x;
       const dz = b.target[2] - p.z;
@@ -1199,7 +1202,7 @@ export class World {
         b.target = null;
         b.move = 'arrived';
         b.block = null;
-        vx = 0; vz = 0;
+        arrived = true;
       } else {
         // Kommt der Körper am Boden nicht mehr näher, steht etwas im Weg. Das Ziel bleibt gesetzt,
         // damit ein Sprung ihn weiter in dieselbe Richtung trägt.
@@ -1216,7 +1219,7 @@ export class World {
           }
         }
         const walk = b.stage === 'old' ? WALK_SPEED * 0.7 : WALK_SPEED;
-        const s = Math.min(b.auto ? walk * 0.35 : walk, d / DT);
+        const s = Math.min(b.auto ? walk * 0.35 : walk, Math.sqrt(2 * DECEL * d * 0.8), d / DT);
         vx = (dx / d) * s;
         vz = (dz / d) * s;
         b.lookYaw = Math.atan2(dx, dz);
@@ -1228,7 +1231,19 @@ export class World {
       const max = TURN_SPEED * DT;
       b.yaw = wrapAngle(b.yaw + Math.max(-max, Math.min(max, diff)));
     }
-    b.body.setLinvel({ x: vx, y: v.y, z: vz }, true);
+    if (b.grounded) {
+      // Geschwindigkeit nähert sich dem Wunsch mit begrenzter Beschleunigung
+      const ex = vx - b.mv[0], ez = vz - b.mv[1];
+      const e = Math.hypot(ex, ez);
+      const braking = Math.hypot(vx, vz) < Math.hypot(b.mv[0], b.mv[1]);
+      const step = (braking ? DECEL : ACCEL) * DT;
+      if (arrived) { b.mv[0] *= 0.5; b.mv[1] *= 0.5; }
+      else if (e <= step) { b.mv[0] = vx; b.mv[1] = vz; }
+      else { b.mv[0] += (ex / e) * step; b.mv[1] += (ez / e) * step; }
+      b.body.setLinvel({ x: b.mv[0], y: v.y, z: b.mv[1] }, true);
+    } else {
+      b.mv[0] = v.x; b.mv[1] = v.z;
+    }
   }
 
   /** Was steht in Laufrichtung direkt vor dem Körper? */
@@ -1417,7 +1432,7 @@ export class World {
     const now = performance.now();
     const agents = [...this.bodies.values()].map((b) => {
       const p = b.body.translation();
-      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, n: [r2(b.needs.hunger), r2(b.needs.thirst), r2(b.needs.boredom), r2(b.needs.joy), r2(b.needs.health)], g: b.stage, ag: Math.floor(b.age / 60), sc: r2(this.scaleOf(b)), in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
+      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), ly: b.lookYaw === null ? undefined : r2(b.lookYaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, n: [r2(b.needs.hunger), r2(b.needs.thirst), r2(b.needs.boredom), r2(b.needs.joy), r2(b.needs.health)], g: b.stage, ag: Math.floor(b.age / 60), sc: r2(this.scaleOf(b)), in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
     });
     const objs = this.objs.filter((o) => !o.lost).map((o) => {
       const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;

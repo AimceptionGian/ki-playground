@@ -4,13 +4,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export interface StaticPart { name: string; center: number[]; size: number[]; ground?: boolean }
 export interface Snap {
   time: number; paused: boolean; speed: number; lock?: boolean; hold?: string[]; resetIn: number | null; resetCount: number;
-  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean; n?: number[]; in?: string; g?: 'child' | 'adult' | 'old'; ag?: number; sc?: number }[];
+  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; ly?: number; holding: number | null; moving: boolean; grounded: boolean; n?: number[]; in?: string; g?: 'child' | 'adult' | 'old'; ag?: number; sc?: number }[];
   src?: { id: number; k: 'bush' | 'pond'; p: number[]; r: number; b: number; m: number }[];
   objs: { id: number; kind: 'cube' | 'rock' | 'ring'; s?: string; name: string; p: number[]; q: number[] }[];
 }
 
 interface Tracked { sig?: string; node: THREE.Object3D; pos: THREE.Vector3; quat: THREE.Quaternion; seen: number }
-interface AgentNode extends Tracked { yaw: number; moving: boolean; scale: number; legs: THREE.Object3D[]; arms: THREE.Object3D[]; color: string; name: string; label: THREE.Sprite }
+interface AgentNode extends Tracked { yaw: number; look: number | null; head: THREE.Group; body: THREE.Object3D[]; phase: number; walk: number; yPrev: number; moving: boolean; scale: number; legs: THREE.Object3D[]; arms: THREE.Object3D[]; color: string; name: string; label: THREE.Sprite }
 
 const WATER_FRAG = `
 uniform float uTime;
@@ -185,15 +185,25 @@ export class Scene {
       return mesh;
     };
     const legs = [box(0.24, 0.7, 0.26, dark, -0.14, 0.7, 0, true), box(0.24, 0.7, 0.26, dark, 0.14, 0.7, 0, true)];
-    box(0.56, 0.62, 0.32, body, 0, 1.01);
+    const torso = box(0.56, 0.62, 0.32, body, 0, 1.01);
     const arms = [box(0.16, 0.58, 0.2, body, -0.37, 1.3, 0, true), box(0.16, 0.58, 0.2, body, 0.37, 1.3, 0, true)];
-    box(0.5, 0.46, 0.46, body, 0, 1.56);
+    // Kopf als eigene Gruppe mit Drehpunkt am Hals, damit er dem Blick folgen kann
+    const head = new THREE.Group();
+    head.position.set(0, 1.32, 0);
+    g.add(head);
+    const hbox = (w: number, h: number, d: number, m: THREE.Material, x: number, y: number, z: number) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      head.add(mesh);
+    };
+    hbox(0.5, 0.46, 0.46, body, 0, 0.24, 0);
     const eye = new THREE.MeshBasicMaterial({ color: '#0a0f14' });
-    box(0.08, 0.1, 0.02, eye, -0.11, 1.58, 0.235);
-    box(0.08, 0.1, 0.02, eye, 0.11, 1.58, 0.235);
+    hbox(0.08, 0.1, 0.02, eye, -0.11, 0.26, 0.235);
+    hbox(0.08, 0.1, 0.02, eye, 0.11, 0.26, 0.235);
     const label = this.makeLabel(a.name);
     g.add(label);
-    return { node: g, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0, yaw: a.yaw, moving: false, scale: a.sc ?? 1, legs, arms, color: a.color, name: a.name, label };
+    return { node: g, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0, yaw: a.yaw, moving: false, look: null, head, body: [torso], phase: Math.random() * 6.28, walk: 0, yPrev: a.p[1], scale: a.sc ?? 1, legs, arms, color: a.color, name: a.name, label };
   }
 
   private makeSource(src: NonNullable<Snap['src']>[number]) {
@@ -267,6 +277,7 @@ export class Scene {
       n.pos.set(a.p[0], a.p[1], a.p[2]);
       n.scale = a.sc ?? 1;
       n.yaw = a.yaw;
+      n.look = a.ly ?? null;
       n.moving = a.moving && a.grounded;
       n.arms.forEach((arm) => (arm.rotation.x = a.holding !== null ? Math.PI : arm.rotation.x > 3 ? 0 : arm.rotation.x));
       n.seen = this.stamp;
@@ -294,16 +305,38 @@ export class Scene {
       o.node.quaternion.slerp(o.quat, k);
     }
     for (const a of this.agents.values()) {
+      const px = a.node.position.x, pz = a.node.position.z;
       if (a.node.position.distanceToSquared(a.pos) > 400) a.node.position.copy(a.pos);
       else a.node.position.lerp(a.pos, k);
       let d = a.yaw - a.node.rotation.y;
       d = Math.atan2(Math.sin(d), Math.cos(d));
       a.node.rotation.y += d * k;
       a.node.scale.setScalar(a.node.scale.x + (a.scale - a.node.scale.x) * k * 0.2);
-      const swing = a.moving && !this.paused ? Math.sin(t * 11) * 0.7 : 0;
+      // Geh-Phase aus der tatsächlich gezeigten Geschwindigkeit: Schritte passen zum Tempo, Stillstand = Ruhe
+      const moved = Math.hypot(a.node.position.x - px, a.node.position.z - pz);
+      const speed = this.paused ? 0 : moved / Math.max(dt, 1e-3);
+      const walk = Math.min(1, speed / 4.5);
+      a.walk += (walk - a.walk) * Math.min(1, dt * 10);
+      if (!this.paused) a.phase += dt * (3 + speed * 1.6);
+      const swing = Math.sin(a.phase) * 0.75 * a.walk;
       a.legs[0].rotation.x += (swing - a.legs[0].rotation.x) * 0.3;
       a.legs[1].rotation.x += (-swing - a.legs[1].rotation.x) * 0.3;
       a.arms.forEach((arm, i) => { if (arm.rotation.x < 3) arm.rotation.x += ((i ? swing : -swing) * 0.6 - arm.rotation.x) * 0.3; });
+      // Wippen beim Gehen, sonst leises Atmen
+      const idle = this.paused ? 0 : 1 - a.walk;
+      const bob = Math.abs(Math.cos(a.phase)) * 0.06 * a.walk;
+      a.body[0].position.y = 1.01 + bob * 0.5;
+      a.head.position.y = 1.32 + bob * 0.5 + Math.sin(t * 1.6 + a.phase) * 0.012 * idle;
+      // Kopf schaut zum Ziel oder Sprecher (relativ zum Körper, begrenzt), im Leerlauf sanftes Umsehen
+      let want = 0;
+      if (a.look !== null) {
+        want = Math.atan2(Math.sin(a.look - a.node.rotation.y), Math.cos(a.look - a.node.rotation.y));
+        want = Math.max(-1.1, Math.min(1.1, want));
+      } else if (idle > 0.5) {
+        want = Math.sin(t * 0.37 + a.phase) * 0.35 * Math.sin(t * 0.13 + a.phase * 2);
+      }
+      a.head.rotation.y += (want - a.head.rotation.y) * Math.min(1, dt * 8);
+      a.head.rotation.x = Math.sin(t * 0.9 + a.phase) * 0.04 * idle;
     }
     if (this.follow) {
       const a = this.agents.get(this.follow);
