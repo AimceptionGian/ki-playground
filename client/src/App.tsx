@@ -10,7 +10,10 @@ export interface AgentInfo {
   beginPrompt: string; continuePrompt: string; sessionMinutes: number;
   running: boolean;
   usage: Usage | null;
+  parents?: { id: string; name: string }[];
 }
+const STAGE_LABEL: Record<string, string> = { child: 'Kind', adult: 'erwachsen', old: 'alt' };
+const OFFSPRING_LABEL: Record<string, string> = { parent: 'wie die Eltern', extern: 'ohne Runner (extern)', api: 'eigener Endpunkt (per API)', claude: 'Claude Code' };
 export interface Usage { input: number; cacheRead: number; cacheWrite: number; output: number; cost: number }
 export interface LogEntry { wall: number; time: number; kind: string; text: string }
 
@@ -77,8 +80,12 @@ export function App() {
   const scene = useRef<Scene | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [baseUrl, setBaseUrl] = useState('');
-  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null>, intents: {} as Record<string, string>, needs: {} as Record<string, number[]> });
+  const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null>, intents: {} as Record<string, string>, needs: {} as Record<string, number[]>, life: {} as Record<string, { g: string; ag: number }> });
   const [lockstep, setLockstep] = useState(false);
+  const [hardness, setHardness] = useState(1);
+  const [lifespan, setLifespan] = useState(120);
+  const [offspring, setOffspring] = useState('parent');
+  const [info, setInfo] = useState('');
   const [hearRange, setHearRange] = useState(30);
   const [resetMin, setResetMin] = useState(60);
   const [rockShape, setRockShape] = useState('block');
@@ -98,6 +105,9 @@ export function App() {
     setRockShape(s.world.rockShape);
     setLockstep(!!s.world.lockstep);
     setHearRange(s.world.hearRange ?? 30);
+    setHardness(s.world.hardness ?? 1);
+    setLifespan(s.world.lifespanMin ?? 120);
+    setOffspring(s.world.offspring?.runner ?? 'parent');
     scene.current?.setStatics(s.statics);
   }, []);
 
@@ -122,10 +132,12 @@ export function App() {
           const states: Record<string, string | null> = {};
           const intents: Record<string, string> = {};
           const needs: Record<string, number[]> = {};
-          for (const a of m.agents) { states[a.id] = a.st ?? null; if (a.in) intents[a.id] = a.in; if (a.n) needs[a.id] = a.n; }
-          const key = `${Math.floor(m.time)}|${m.paused}|${m.speed}|${m.resetIn}|${(m.hold || []).join()}|${JSON.stringify(states)}|${JSON.stringify(intents)}`;
-          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states, intents, needs }); }
+          const life: Record<string, { g: string; ag: number }> = {};
+          for (const a of m.agents) { states[a.id] = a.st ?? null; if (a.in) intents[a.id] = a.in; if (a.n) needs[a.id] = a.n; if (a.g) life[a.id] = { g: a.g, ag: a.ag ?? 0 }; }
+          const key = `${Math.floor(m.time)}|${m.paused}|${m.speed}|${m.resetIn}|${(m.hold || []).join()}|${JSON.stringify(states)}|${JSON.stringify(intents)}|${JSON.stringify(life)}`;
+          if (key !== lastKey) { lastKey = key; setMeta({ time: m.time, paused: m.paused, speed: m.speed, resetIn: m.resetIn, hold: m.hold || [], states, intents, needs, life }); }
         } else if (m.t === 'agents') load().catch(() => {});
+        else if (m.t === 'death') { setInfo(`✝ ${m.name} ist gestorben (${m.cause}, ${Math.round(m.age_min)} min alt)`); setTimeout(() => setInfo(''), 8000); }
         else if (m.t === 'log') logSubs.current.forEach((f) => f(m.id, m.entry));
         else if (m.t === 'usage') setAgents((list) => list.map((a) => (a.id === m.id ? { ...a, usage: m.usage } : a)));
         else if (m.t === 'note') noteSubs.current.forEach((f) => f(m));
@@ -167,6 +179,11 @@ export function App() {
               <div>
                 <b>{a.name}</b>
                 <small>{RUNNER_LABEL[a.runner]}{a.model ? ` · ${a.model}` : ''}</small>
+                {meta.life[a.id] && (
+                  <small className="life" title={a.parents?.length ? `Kind von ${a.parents.map((p) => p.name).join(' und ')}` : 'Gründer der Insel'}>
+                    {STAGE_LABEL[meta.life[a.id].g]} · {meta.life[a.id].ag} min{a.parents?.length ? ` · von ${a.parents.map((p) => p.name).join(' & ')}` : ''}
+                  </small>
+                )}
                 {meta.intents[a.id] && <small className="intent" title="Plan, den der Körper gerade abarbeitet">→ {meta.intents[a.id]}</small>}
                 {meta.needs[a.id] && <NeedBars n={meta.needs[a.id]} />}
                 {a.usage && <UsageLine u={a.usage} />}
@@ -225,10 +242,32 @@ export function App() {
           </select>
           <small>Form des Felsens</small>
         </label>
+        <label className="num">
+          <input type="number" min={0.1} max={5} step={0.1} value={hardness} onChange={(e) => setHardness(Number(e.target.value))} onBlur={() => control({ hardness })} />
+          <small>Härte (1 = normal)</small>
+        </label>
+        <label className="num">
+          <input type="number" min={10} value={lifespan} onChange={(e) => setLifespan(Number(e.target.value))} onBlur={async () => {
+            const s = await api('/api/state').catch(() => null);
+            const before = s?.world.lifespanMin ?? lifespan;
+            if (lifespan === before) return;
+            // kürzer heisst: wer schon älter ist, stirbt sofort, und das lässt sich nicht rückgängig machen
+            if (lifespan < before && !confirm(`Lebensdauer von ${before} auf ${lifespan} min senken? Wer schon älter ist als sein neues Höchstalter, stirbt sofort.`)) { setLifespan(before); return; }
+            control({ lifespanMin: lifespan });
+          }} />
+          <small>Lebensdauer min (±20 %)</small>
+        </label>
+        <label className="num">
+          <select value={offspring} onChange={(e) => { setOffspring(e.target.value); control({ offspring: { runner: e.target.value } }); }}>
+            {Object.entries(OFFSPRING_LABEL).filter(([k]) => k !== 'api' || offspring === 'api').map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          <small>Runner der Kinder</small>
+        </label>
         <button className="ghost" onClick={() => confirm('Welt jetzt zurücksetzen? Objekte und Körper gehen auf Anfang, die Dateien der Agenten bleiben.') && guard(() => api('/api/reset', 'POST'))}>Welt zurücksetzen</button>
       </footer>
 
       {error && <div className="toast" onClick={() => setError('')}>{error}</div>}
+      {info && !error && <div className="toast info" onClick={() => setInfo('')}>{info}</div>}
     </div>
   );
 }

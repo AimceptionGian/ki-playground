@@ -4,13 +4,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export interface StaticPart { name: string; center: number[]; size: number[]; ground?: boolean }
 export interface Snap {
   time: number; paused: boolean; speed: number; lock?: boolean; hold?: string[]; resetIn: number | null; resetCount: number;
-  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean; n?: number[]; in?: string }[];
+  agents: { st?: 'wait' | 'think' | 'away' | null; id: string; name: string; color: string; p: number[]; yaw: number; holding: number | null; moving: boolean; grounded: boolean; n?: number[]; in?: string; g?: 'child' | 'adult' | 'old'; ag?: number; sc?: number }[];
   src?: { id: number; k: 'bush' | 'pond'; p: number[]; r: number; b: number; m: number }[];
   objs: { id: number; kind: 'cube' | 'rock' | 'ring'; s?: string; name: string; p: number[]; q: number[] }[];
 }
 
 interface Tracked { sig?: string; node: THREE.Object3D; pos: THREE.Vector3; quat: THREE.Quaternion; seen: number }
-interface AgentNode extends Tracked { yaw: number; moving: boolean; legs: THREE.Object3D[]; arms: THREE.Object3D[]; color: string; name: string; label: THREE.Sprite }
+interface AgentNode extends Tracked { yaw: number; moving: boolean; scale: number; legs: THREE.Object3D[]; arms: THREE.Object3D[]; color: string; name: string; label: THREE.Sprite }
 
 const WATER_FRAG = `
 uniform float uTime;
@@ -193,7 +193,7 @@ export class Scene {
     box(0.08, 0.1, 0.02, eye, 0.11, 1.58, 0.235);
     const label = this.makeLabel(a.name);
     g.add(label);
-    return { node: g, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0, yaw: a.yaw, moving: false, legs, arms, color: a.color, name: a.name, label };
+    return { node: g, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), seen: 0, yaw: a.yaw, moving: false, scale: a.sc ?? 1, legs, arms, color: a.color, name: a.name, label };
   }
 
   private makeSource(src: NonNullable<Snap['src']>[number]) {
@@ -260,10 +260,12 @@ export class Scene {
       if (!n) {
         n = this.makeAgent(a);
         n.node.position.set(a.p[0], a.p[1], a.p[2]);
+        n.node.scale.setScalar(n.scale);
         this.scene.add(n.node);
         this.agents.set(a.id, n);
       }
       n.pos.set(a.p[0], a.p[1], a.p[2]);
+      n.scale = a.sc ?? 1;
       n.yaw = a.yaw;
       n.moving = a.moving && a.grounded;
       n.arms.forEach((arm) => (arm.rotation.x = a.holding !== null ? Math.PI : arm.rotation.x > 3 ? 0 : arm.rotation.x));
@@ -297,6 +299,7 @@ export class Scene {
       let d = a.yaw - a.node.rotation.y;
       d = Math.atan2(Math.sin(d), Math.cos(d));
       a.node.rotation.y += d * k;
+      a.node.scale.setScalar(a.node.scale.x + (a.scale - a.node.scale.x) * k * 0.2);
       const swing = a.moving && !this.paused ? Math.sin(t * 11) * 0.7 : 0;
       a.legs[0].rotation.x += (swing - a.legs[0].rotation.x) * 0.3;
       a.legs[1].rotation.x += (-swing - a.legs[1].rotation.x) * 0.3;

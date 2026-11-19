@@ -6,7 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createVite } from 'vite';
 import react from '@vitejs/plugin-react';
 import { World, STATICS } from './world.ts';
-import { AgentStore, DATA_ROOT, type Agent } from './agents.ts';
+import { AgentStore, DATA_ROOT, type Agent, type Offspring } from './agents.ts';
 import { Runners } from './runner.ts';
 import { TOOLS, runTool, normalizeAction } from './tools.ts';
 
@@ -16,19 +16,51 @@ const BASE = `http://localhost:${PORT}`;
 const world = await World.create();
 const store = new AgentStore(BASE);
 const runners = new Runners(world, store);
-for (const a of store.agents) world.addBody(a.id, a.name, a.color);
 
 // Welt-Einstellungen überdauern einen Neustart
 const SETTINGS = path.join(DATA_ROOT, 'settings.json');
+let offspring: Offspring = { runner: 'parent' };
+const RUNNERS = ['parent', 'extern', 'api', 'claude'];
 try {
   const s = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
+  if (typeof s.lifespanMin === 'number') world.lifespanMin = s.lifespanMin;
+  if (s.offspring && RUNNERS.includes(s.offspring.runner)) offspring = s.offspring;
   if (typeof s.resetIntervalMin === 'number') world.resetIntervalMin = s.resetIntervalMin;
   if (s.rockShape === 'ball' || s.rockShape === 'block') world.setRockShape(s.rockShape);
   if (typeof s.lockstep === 'boolean') world.lockstep = s.lockstep;
   if (typeof s.hearRange === 'number') world.hearRange = s.hearRange;
   if (typeof s.hardness === 'number') world.hardness = s.hardness;
 } catch { /* noch keine gespeichert */ }
-const saveSettings = () => fs.writeFileSync(SETTINGS, JSON.stringify({ resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange, hardness: world.hardness }, null, 2));
+const saveSettings = () => fs.writeFileSync(SETTINGS, JSON.stringify({ resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange, hardness: world.hardness, lifespanMin: world.lifespanMin, offspring }, null, 2));
+
+// Körper erst nach den Einstellungen anlegen: das Alter neuer Gründer hängt von der Lebensdauer ab
+const bodyOpts = (a: Agent) => ({ age: a.age, nextBirthAge: a.nextBirthAge, lifeFactor: a.lifeFactor, parents: a.parents });
+for (const a of store.agents) world.addBody(a.id, a.name, a.color, bodyOpts(a));
+store.setAges(world.ages());
+setInterval(() => store.setAges(world.ages()), 10_000);
+
+// ---------- Lebenszyklus ----------
+
+world.onBirth = (pa, pb, pos) => {
+  const A = store.get(pa), B = store.get(pb);
+  const child = store.createChild(A, B, offspring);
+  world.addBody(child.id, child.name, child.color, { ...bodyOpts(child), pos });
+  store.log(child.id, world.simTime, 'system', `Geboren als Kind von ${A.name} und ${B.name}`);
+  // Nachwuchs lebt, wenn die Eltern leben: mit eigenem Runner nur, wenn ein Elternteil läuft oder ein eigener eingestellt ist
+  if (child.runner !== 'extern' && (offspring.runner !== 'parent' || runners.isRunning(pa) || runners.isRunning(pb))) {
+    try { runners.start(child); } catch (e: any) { store.log(child.id, world.simTime, 'error', e?.message || String(e)); }
+  }
+  broadcast({ t: 'agents' });
+  return { id: child.id, name: child.name };
+};
+
+world.onDeath = (id, info) => {
+  store.log(id, world.simTime, 'system', `Gestorben (${info.cause}) mit ${Math.round(info.age_min)} min`);
+  broadcast({ t: 'death', id, ...info });
+  runners.stop(id);
+  store.bury(id, { cause: info.cause, age_min: info.age_min, world_time: Math.round(world.simTime) });
+  broadcast({ t: 'agents' });
+};
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
@@ -79,13 +111,21 @@ const wrap = (fn: (req: express.Request, res: express.Response) => unknown) => a
 app.get('/api/state', wrap(() => ({
   agents: store.agents.map(pub),
   statics: STATICS,
-  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange, hardness: world.hardness, time: world.simTime },
+  world: { paused: world.paused, speed: world.speed, resetIntervalMin: world.resetIntervalMin, rockShape: world.rockShape, lockstep: world.lockstep, hearRange: world.hearRange, hardness: world.hardness, lifespanMin: world.lifespanMin, offspring: { ...offspring, apiKey: undefined, hasKey: !!offspring.apiKey }, time: world.simTime },
   baseUrl: BASE,
 })));
 
 app.post('/api/control', wrap((req) => {
-  const { paused, speed, resetIntervalMin, rockShape, lockstep, hearRange, hardness } = req.body || {};
+  const { paused, speed, resetIntervalMin, rockShape, lockstep, hearRange, hardness, lifespanMin, offspring: off } = req.body || {};
   if (typeof hardness === 'number' && hardness >= 0.1 && hardness <= 5) { world.hardness = hardness; saveSettings(); }
+  if (typeof lifespanMin === 'number' && lifespanMin >= 10 && lifespanMin <= 100_000) { world.lifespanMin = lifespanMin; saveSettings(); }
+  if (off && typeof off === 'object') {
+    if (!RUNNERS.includes(off.runner)) throw new Error(`offspring.runner muss eines von ${RUNNERS.join(', ')} sein`);
+    if (off.runner === 'api' && (!off.baseUrl || !off.model)) throw new Error('Für Nachwuchs über einen Endpunkt müssen baseUrl und model gesetzt sein.');
+    // ein leer gelassener Schlüssel behält den gespeicherten
+    offspring = { runner: off.runner, baseUrl: String(off.baseUrl || ''), model: String(off.model || ''), apiKey: off.apiKey === undefined ? offspring.apiKey : String(off.apiKey || '') };
+    saveSettings();
+  }
   if (typeof hearRange === 'number' && hearRange >= 0) { world.hearRange = hearRange; saveSettings(); broadcast({ t: 'agents' }); }
   if (typeof lockstep === 'boolean') { world.lockstep = lockstep; saveSettings(); broadcast({ t: 'agents' }); }
   if (rockShape === 'block' || rockShape === 'ball') { world.setRockShape(rockShape); saveSettings(); broadcast({ t: 'agents' }); }
@@ -101,8 +141,9 @@ app.post('/api/control', wrap((req) => {
 app.post('/api/reset', wrap(() => { world.reset(); broadcast(world.snapshot()); }));
 
 app.post('/api/agents', wrap((req) => {
-  const a = store.create(req.body || {});
-  world.addBody(a.id, a.name, a.color);
+  const { name, color, runner, baseUrl, apiKey, model, beginPrompt, continuePrompt, sessionMinutes } = req.body || {};
+  const a = store.create({ name, color, runner, baseUrl, apiKey, model, beginPrompt, continuePrompt, sessionMinutes });
+  world.addBody(a.id, a.name, a.color, bodyOpts(a));
   broadcast({ t: 'agents' });
   return pub(a);
 }));
@@ -200,7 +241,7 @@ app.use(vite.middlewares);
 
 // Beim Beenden keine Agenten-Prozesse zurücklassen, die weiter Kontingent verbrauchen
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-  process.on(sig, () => { runners.stopAll(); store.saveUsage(); process.exit(0); });
+  process.on(sig, () => { runners.stopAll(); store.saveUsage(); store.setAges(world.ages()); process.exit(0); });
 }
 
 server.listen(PORT, '127.0.0.1', () => console.log(`KI Playground läuft auf ${BASE}`));

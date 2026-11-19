@@ -168,7 +168,11 @@ export class Runners {
     const handle: Handle = {
       stop: () => {
         alive = false;
-        if (proc?.pid) { try { proc.kill('SIGCONT'); proc.kill('SIGTERM'); } catch {} }
+        // getrennt: unter Windows wirft SIGCONT (ERR_UNKNOWN_SIGNAL), SIGTERM muss trotzdem raus
+        if (proc?.pid) {
+          if (process.platform !== 'win32') { try { proc.kill('SIGCONT'); } catch {} }
+          try { proc.kill('SIGTERM'); } catch {}
+        }
       },
       setPaused: (p) => {
         if (!proc?.pid || p === stopped) return;

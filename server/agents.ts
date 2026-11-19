@@ -17,6 +17,20 @@ export interface Agent {
   beginPrompt: string;
   continuePrompt: string;
   sessionMinutes: number; // Weltzeit, nach der der Kontext geleert wird
+  // Lebenszyklus (fehlt bei älteren Agenten: dann erwachsen, ohne Eltern)
+  age?: number; // gelebte Sekunden Weltzeit, wird regelmässig gespeichert
+  lifeFactor?: number; // Streuung des Höchstalters (0.8 bis 1.2)
+  parents?: { id: string; name: string }[];
+  born?: string; // Datum der Geburt (nur Kinder)
+  nextBirthAge?: number; // Abklingzeit nach einem Kind, überdauert einen Neustart
+}
+
+/** Welchen Runner bekommen Kinder? 'parent' = den eines Elternteils, sonst diesen. */
+export interface Offspring {
+  runner: 'parent' | RunnerType;
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
 }
 
 /** Summierter Tokenverbrauch eines Agenten über alle Sitzungen. */
@@ -41,6 +55,9 @@ const FILE = path.join(ROOT, 'agents.json');
 const WS = path.join(ROOT, 'workspaces');
 const LOGS = path.join(ROOT, 'logs');
 const USAGE = path.join(ROOT, 'usage.json');
+const GRAVE = path.join(ROOT, 'graveyard');
+const BIRTH_START = '<!-- geburt -->';
+const BIRTH_END = '<!-- /geburt -->';
 
 export class AgentStore {
   agents: Agent[] = [];
@@ -111,7 +128,9 @@ export class AgentStore {
     const name = (input.name || '').trim() || `Eko${this.agents.length + 1}`;
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'agent';
     let id = slug;
-    for (let i = 2; this.agents.some((a) => a.id === id) || fs.existsSync(path.join(WS, id)); i++) id = `${slug}-${i}`;
+    // auch Ids aus dem Grab nicht wiederverwenden: Protokoll, Verbrauch und Familie hängen an der Id
+    const used = (x: string) => this.agents.some((a) => a.id === x) || fs.existsSync(path.join(WS, x)) || fs.existsSync(path.join(GRAVE, x));
+    for (let i = 2; used(id); i++) id = `${slug}-${i}`;
     const a: Agent = {
       id,
       name,
@@ -124,11 +143,84 @@ export class AgentStore {
       beginPrompt: input.beginPrompt || BEGIN,
       continuePrompt: input.continuePrompt || CONTINUE,
       sessionMinutes: input.sessionMinutes ?? 60,
+      lifeFactor: input.lifeFactor ?? 0.8 + Math.random() * 0.4,
+      ...(input.age !== undefined ? { age: input.age } : {}),
+      ...(input.parents ? { parents: input.parents } : {}),
+      ...(input.born ? { born: input.born } : {}),
     };
     this.agents.push(a);
     this.ensureWorkspace(a);
     this.save();
     return a;
+  }
+
+  /** Legt das Kind zweier Agenten an: Name und Farbe gemischt, SOUL.md aus beiden, Runner nach Welt-Einstellung. */
+  createChild(pa: Agent, pb: Agent, offspring: Offspring): Agent {
+    // Vorbild für den Runner: wer selbst einen hat, sonst zufällig
+    const both = [pa, pb].sort(() => Math.random() - 0.5);
+    const tpl = both.find((x) => x.runner !== 'extern') ?? both[0];
+    const run = offspring.runner === 'parent'
+      ? { runner: tpl.runner, baseUrl: tpl.baseUrl, apiKey: tpl.apiKey, model: tpl.model }
+      : { runner: offspring.runner, baseUrl: offspring.baseUrl || '', apiKey: offspring.apiKey || '', model: offspring.model || '' };
+    const name = this.childName(pa.name, pb.name);
+    const child = this.create({
+      name, color: mixColor(pa.color, pb.color), ...run,
+      beginPrompt: tpl.beginPrompt, continuePrompt: tpl.continuePrompt, sessionMinutes: tpl.sessionMinutes,
+      age: 0, parents: [{ id: pa.id, name: pa.name }, { id: pb.id, name: pb.name }], born: new Date().toISOString(),
+    });
+    const soul = (a: Agent) => { try { return this.readFile(a, 'SOUL.md'); } catch { return SOUL; } };
+    this.writeFile(child, 'SOUL.md', inheritSoul(name, pa.name, soul(pa), pb.name, soul(pb)), true);
+    return child;
+  }
+
+  /** Erste Hälfte des einen Namens, zweite des anderen; eindeutig unter den Lebenden. */
+  private childName(a: string, b: string): string {
+    const letters = (s: string) => s.replace(/[^A-Za-zÀ-ÿ]/g, '') || 'Eko';
+    const x = letters(a), y = letters(b);
+    let base = (x.slice(0, Math.ceil(x.length / 2)) + y.slice(Math.floor(y.length / 2))).toLowerCase();
+    if (base.length < 3) base += 'o';
+    base = base[0].toUpperCase() + base.slice(1);
+    const taken = new Set(this.agents.map((g) => g.name.toLowerCase()));
+    let name = base;
+    for (let i = 2; taken.has(name.toLowerCase()); i++) name = `${base}${i}`;
+    return name;
+  }
+
+  /** Tod: aus der Liste nehmen, Arbeitsordner nach data/graveyard/ verschieben. */
+  bury(id: string, info: Record<string, unknown>) {
+    const a = this.agents.find((x) => x.id === id);
+    if (!a) return;
+    this.remove(id);
+    this.seen.delete(id);
+    const from = this.dir(a);
+    fs.mkdirSync(GRAVE, { recursive: true });
+    let to = path.join(GRAVE, a.id);
+    for (let i = 2; fs.existsSync(to); i++) to = path.join(GRAVE, `${a.id}-${i}`);
+    const record = { id: a.id, name: a.name, color: a.color, parents: a.parents ?? [], born: a.born ?? null, died: new Date().toISOString(), ...info };
+    // Unter Windows hält ein eben beendeter Claude-Code-Prozess den Ordner noch kurz fest
+    const attempt = (n: number) => {
+      try {
+        fs.renameSync(from, to);
+        fs.writeFileSync(path.join(to, 'GRAB.json'), JSON.stringify(record, null, 2));
+        fs.rmSync(path.join(to, 'API.md'), { force: true }); // enthält das alte Token
+      } catch (e: any) {
+        if (n < 30 && fs.existsSync(from)) setTimeout(() => attempt(n + 1), 1000);
+        else console.error(`Arbeitsordner von ${a.name} liess sich nicht ins Grab verschieben: ${e?.message || e}`);
+      }
+    };
+    attempt(0);
+  }
+
+  /** Übernimmt das Alter aus der Welt und speichert, wenn sich etwas getan hat. */
+  setAges(ages: Record<string, { age: number; nextBirthAge: number }>) {
+    let changed = false;
+    for (const a of this.agents) {
+      const v = ages[a.id];
+      if (!v) continue;
+      if (Math.abs((a.age ?? -1e9) - v.age) >= 1) { a.age = Math.round(v.age * 10) / 10; changed = true; }
+      if (v.nextBirthAge > 0 && a.nextBirthAge !== v.nextBirthAge) { a.nextBirthAge = Math.round(v.nextBirthAge); changed = true; }
+    }
+    if (changed) this.save();
   }
 
   update(id: string, patch: Partial<Agent>): Agent {
@@ -235,6 +327,45 @@ export class AgentStore {
   getLog(id: string): LogEntry[] {
     return this.logs.get(id) || [];
   }
+}
+
+/** Mittel der beiden Farben, leicht verschoben, damit Geschwister sich unterscheiden. */
+function mixColor(a: string, b: string): string {
+  const rgb = (c: string) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(c.trim());
+    const n = m ? parseInt(m[1], 16) : 0xb6e23a;
+    return [n >> 16, (n >> 8) & 255, n & 255];
+  };
+  const x = rgb(a), y = rgb(b);
+  return '#' + x.map((v, i) => Math.max(0, Math.min(255, Math.round((v + y[i]) / 2 + (Math.random() - 0.5) * 40))).toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * SOUL.md des Kindes: Absätze beider Eltern, an jeder Stelle zufällig vom einen oder anderen
+ * (wie beim Erbgut), davor ein kurzer Geburtsabschnitt. Der Abschnitt der Eltern wird nicht weitervererbt,
+ * damit die Datei über Generationen nicht wächst.
+ */
+function inheritSoul(child: string, na: string, sa: string, nb: string, sb: string): string {
+  const paras = (s: string) => s
+    .replace(new RegExp(`${BIRTH_START}[\\s\\S]*?${BIRTH_END}`, 'g'), '')
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/^# .*(\n|$)/, '').trim())
+    .filter(Boolean);
+  const A = paras(sa), B = paras(sb);
+  const out: string[] = [];
+  for (let i = 0; i < Math.max(A.length, B.length) && out.length < 14; i++) {
+    const pick = A[i] !== undefined && B[i] !== undefined ? (Math.random() < 0.5 ? A[i] : B[i]) : Math.random() < 0.6 ? A[i] ?? B[i] : undefined;
+    if (pick && !out.includes(pick)) out.push(pick);
+  }
+  return `# SOUL.md – Wer du bist
+
+${BIRTH_START}
+Du bist ${child}, das Kind von ${na} und ${nb}. Du wurdest auf dieser Insel geboren und bist noch klein;
+was du kannst, lernst du erst. Was hier steht, hast du von deinen Eltern. Es ist ein Anfang, kein Gesetz.
+${BIRTH_END}
+
+${out.join('\n\n')}
+`;
 }
 
 /** Was ist neu? Angehängter Text, sonst die Zeilen, die es vorher nicht gab. */

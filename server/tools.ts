@@ -12,7 +12,7 @@ export interface ToolDef {
 
 /** Eine Werkzeugliste für alle Wege: eingebauter Runner, MCP und HTTP-API. */
 export const TOOLS: ToolDef[] = [
-  { name: 'observe', description: 'Beobachte die Welt: dein Körper (mit laufendem Plan und Bedürfnissen), alle Objekte und Plattformen, der Chat.', parameters: { type: 'object', properties: {} } },
+  { name: 'observe', description: 'Beobachte die Welt: dein Körper (mit laufendem Plan, Bedürfnissen und Alter), alle Objekte und Plattformen, der Chat.', parameters: { type: 'object', properties: {} } },
   {
     name: 'act',
     description: 'Gib deinem Körper einen Plan: Schritte, die er selbständig nacheinander ausführt. Kehrt sofort zurück; während der Körper handelt, kannst du weiterdenken. '
@@ -49,13 +49,14 @@ export const TOOLS: ToolDef[] = [
   { name: 'throw', description: 'Wirf das gehaltene Objekt in eine Richtung [x, y, z] mit einer Geschwindigkeit.', parameters: { type: 'object', properties: { direction: vec, speed: { type: 'number' } }, required: ['direction', 'speed'] } },
   { name: 'say', description: 'Sag etwas. Wer in Hörweite ist, hört es.', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
   { name: 'wait', description: 'Warte einige Sekunden Weltzeit (höchstens 30) und beobachte dich danach. Endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert.', parameters: { type: 'object', properties: { seconds: { type: 'number' } }, required: ['seconds'] } },
+  { name: 'reproduce', description: 'Bekomm ein Kind mit jemandem, der nah bei dir steht (höchstens 4 Einheiten). Beide müssen es wollen: Beide rufen reproduce mit dem Namen des anderen auf, innerhalb von 60 Sekunden. Beide müssen erwachsen, froh genug und nicht hungrig oder durstig sein.', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   { name: 'list_files', description: 'Liste die Dateien in deinem Arbeitsordner.', parameters: { type: 'object', properties: {} }, files: true },
   { name: 'read_file', description: 'Lies eine Datei aus deinem Arbeitsordner.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }, files: true },
   { name: 'write_file', description: 'Schreib eine Datei in deinem Arbeitsordner (ersetzt den Inhalt).', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] }, files: true },
   { name: 'append_file', description: 'Häng Text ans Ende einer Datei in deinem Arbeitsordner.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] }, files: true },
 ];
 
-const ALIAS: Record<string, string> = { act: 'act', plan: 'act', moveto: 'move_to', move: 'move_to', throw: 'throw', pickup: 'pickup', place: 'place', jump: 'jump', stop: 'stop', say: 'say', wait: 'wait', observe: 'observe' };
+const ALIAS: Record<string, string> = { act: 'act', plan: 'act', moveto: 'move_to', move: 'move_to', throw: 'throw', pickup: 'pickup', place: 'place', jump: 'jump', stop: 'stop', say: 'say', wait: 'wait', observe: 'observe', reproduce: 'reproduce' };
 
 export function normalizeAction(type: string): string {
   const k = String(type || '').toLowerCase().replace(/[^a-z_]/g, '');
@@ -92,6 +93,7 @@ export async function runTool(world: World, store: AgentStore, agent: Agent, nam
       case 'place': result = world.act(agent.id, { steps: [{ type: 'place', position: args.position, rotation: args.rotation }] }); break;
       case 'stop': result = world.stop(agent.id); break;
       case 'say': result = world.say(agent.id, args.text); break;
+      case 'reproduce': result = world.reproduce(agent.id, args); break;
       case 'wait': {
         const s = Math.max(0, Math.min(30, Number(args.seconds) || 0));
         const start = world.simTime;

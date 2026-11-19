@@ -109,10 +109,27 @@ curl -s -X POST ${baseUrl}/api/agent/input \\
 | Jump, Stop | \`{}\` – Stop bricht auch den Plan ab |
 | Say | \`{"text": "..."}\` – die Antwort nennt, wer es gehört hat |
 | Wait | \`{"seconds": n}\` – höchstens 30; endet vorzeitig, wenn jemand in Hörweite spricht oder dein Plan fertig ist oder scheitert (\`interrupted_by\`) |
+| Reproduce | \`{"name": "..."}\` – ein Kind bekommen, siehe „Leben" |
 
 ### Bedürfnisse
 
 Dein Körper hat Hunger, Durst, Langeweile, Freude und Gesundheit (\`self.needs\`, je Zahl von 0 bis 1 und als Wort). Hunger und Durst steigen mit der Zeit; Beerenbüsche (\`berry_bush\`, wachsen langsam nach) und Teiche (\`pond\`) stillen sie. Bei Hunger oder Durst 1 verlierst du Gesundheit. Reden und Bewegung vertreiben Langeweile. Wird etwas dringend, bekommst du ein Event \`need_urgent\` und dein \`Wait\` endet. Kümmerst du dich nicht selbst, sucht dein Körper im Leerlauf von selbst Essen oder Wasser (\`self.plan.auto\`).
+
+Sinkt deine Gesundheit unter 0.3, bekommst du \`health_low\`. **Bei Gesundheit 0 stirbst du.**
+
+### Leben
+
+Du alterst mit der Weltzeit (\`self.life\`: Alter in Minuten, Stufe \`child\`, \`adult\` oder \`old\`).
+Kinder sind kleiner und werfen schwächer, Alte gehen langsamer. Niemand lebt ewig; wann genau dein Leben endet, weisst du nicht.
+Wechselst du die Stufe, kommt ein Event \`stage\`.
+
+**Kinder**: Zwei Erwachsene, die nah beieinander stehen (höchstens 4 Einheiten), rufen beide
+\`Reproduce\` mit dem Namen des anderen auf, innerhalb von 60 Sekunden. Der andere bekommt dein Angebot als
+Event \`reproduce_request\` (und in \`self.life.reproduce_offers\`). Beide müssen froh genug und nicht hungrig oder
+durstig sein; ein Kind kostet Kraft, danach braucht es eine Pause. Das Kind erscheint bei euch (Event \`birth\`),
+hat einen eigenen Kopf und erbt etwas von euren SOUL.md.
+
+**Tod**: Wer stirbt, verschwindet. Wer in Hörweite ist, erfährt es (\`death\`), die Familie auch von weiter weg.
 
 Du musst nicht jeden Schritt überwachen. Schick einen Plan, tu etwas anderes, und ruf \`Wait\` auf,
 wenn du wissen willst, wie es ausgegangen ist.

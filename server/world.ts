@@ -54,8 +54,20 @@ interface Body {
   urgent: { hunger: boolean; thirst: boolean }; // schon als dringend gemeldet
   cheer: number; // kurzer Freudenschub durch Reden und Spielen, klingt ab
   autoCool: number; // Weltzeit, vor der der Körper keinen neuen Eigenplan startet
-  exhausted: boolean;
+  healthLow: boolean; // schon als gefährlich gemeldet
+  grief: number; // Trauer nach einem Tod, klingt langsam ab
+  // Lebenszyklus
+  age: number; // gelebte Sekunden Weltzeit
+  lifeFactor: number; // Streuung des Höchstalters (0.8 bis 1.2)
+  parents: { id: string; name: string }[];
+  stage: Stage;
+  offer: { to: string; until: number } | null; // Angebot, gemeinsam ein Kind zu bekommen
+  nextBirthAge: number; // Alter, ab dem wieder ein Kind möglich ist
+  dead: string | null; // Todesursache; der Körper wird am Ende des Schritts entfernt
 }
+
+export type Stage = 'child' | 'adult' | 'old';
+export interface BodyOpts { age?: number; nextBirthAge?: number; lifeFactor?: number; parents?: { id: string; name: string }[]; pos?: Vec3 }
 
 export interface Needs { hunger: number; thirst: number; boredom: number; joy: number; health: number }
 
@@ -109,6 +121,14 @@ const BERRY_FOOD = 0.3; // so viel Hunger stillt eine Beere
 const EAT_EVERY = 0.8; // Sekunden pro Beere
 const DRINK_RATE = 0.4; // Durst, der pro Sekunde sinkt
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+// Lebenszyklus: Anteile am Höchstalter
+const CHILD_END = 0.15;
+const OLD_START = 0.75;
+const FOUNDER_AGE = 0.25; // Agenten aus der Weboberfläche kommen erwachsen zur Welt
+const BIRTH_COOLDOWN = 600; // Sekunden Weltzeit zwischen zwei Kindern
+const OFFER_TIME = 60; // so lange gilt ein Angebot zur Fortpflanzung
+const MATE_RANGE = 4;
+const STAGE_WORD: Record<Stage, string> = { child: 'Kind', adult: 'erwachsen', old: 'alt' };
 const TURN_SPEED = 9; // rad/s
 const MAX_JUMP_UP = 2.3; // so hoch kommt ein Sprung über die Füsse
 
@@ -203,6 +223,12 @@ export class World {
   resetCount = 0;
   chat: { time: number; from: string; text: string }[] = [];
   onReset: (() => void) | null = null;
+  /** Höchstalter in Minuten Weltzeit (je Agent ±20 %). */
+  lifespanMin = 120;
+  /** Zwei Agenten bekommen ein Kind: legt Agent und Arbeitsordner an und ruft addBody auf. */
+  onBirth: ((a: string, b: string, pos: Vec3) => { id: string; name: string }) | null = null;
+  /** Ein Agent ist gestorben; sein Körper ist schon entfernt. */
+  onDeath: ((id: string, info: { name: string; cause: string; age_min: number }) => void) | null = null;
   /** Jemand hat etwas gesagt (auch aus einem Plan heraus). */
   onSay: ((id: string, text: string) => void) | null = null;
 
@@ -307,15 +333,136 @@ export class World {
 
   // ---------- Körper der Agenten ----------
 
-  addBody(id: string, name: string, color: string) {
+  addBody(id: string, name: string, color: string, opts: BodyOpts = {}) {
     if (this.bodies.has(id)) return;
     const idx = this.bodies.size;
+    // spawn ist der Ort fürs Wiederauftauchen nach einem Sturz; Kinder erscheinen anfangs bei den Eltern
     const spawn: Vec3 = [(idx % 4) * 2.5 - 2, 1.2, 14 + Math.floor(idx / 4) * 2.5];
     const body = this.rw.createRigidBody(
-      RAPIER.RigidBodyDesc.dynamic().setTranslation(...spawn).lockRotations().setCcdEnabled(true),
+      RAPIER.RigidBodyDesc.dynamic().setTranslation(...(opts.pos ?? spawn)).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1 }, urgent: { hunger: false, thirst: false }, cheer: 0, autoCool: 0, exhausted: false });
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [], plan: null, lookYaw: null, auto: false, idle: 0, nextLook: 0, needs: { hunger: 0.2, thirst: 0.2, boredom: 0, joy: 0.7, health: 1 }, urgent: { hunger: false, thirst: false }, cheer: 0, autoCool: 0, healthLow: false, grief: 0,
+      age: 0, lifeFactor: opts.lifeFactor ?? 1, parents: opts.parents ?? [], stage: 'adult', offer: null, nextBirthAge: opts.nextBirthAge ?? 0, dead: null });
+    const b = this.bodies.get(id)!;
+    b.age = opts.age ?? FOUNDER_AGE * this.lifespan(b);
+    b.stage = this.stageOf(b);
+    if (b.stage === 'child') b.needs.joy = 0.8;
+  }
+
+  // ---------- Lebenszyklus ----------
+
+  private lifespan(b: Body) {
+    return this.lifespanMin * 60 * b.lifeFactor;
+  }
+
+  private stageOf(b: Body): Stage {
+    const f = b.age / this.lifespan(b);
+    return f < CHILD_END ? 'child' : f < OLD_START ? 'adult' : 'old';
+  }
+
+  /** Grösse für die Darstellung: Kinder wachsen bis zum Erwachsenwerden. */
+  private scaleOf(b: Body): number {
+    if (b.stage === 'child') return 0.55 + 0.45 * (b.age / this.lifespan(b) / CHILD_END);
+    return b.stage === 'old' ? 0.94 : 1;
+  }
+
+  /** Alter aller Körper in Sekunden, zum Speichern. */
+  ages(): Record<string, { age: number; nextBirthAge: number }> {
+    return Object.fromEntries([...this.bodies.values()].map((b) => [b.id, { age: b.age, nextBirthAge: b.nextBirthAge }]));
+  }
+
+  private tickLife(b: Body) {
+    b.age += DT;
+    const st = this.stageOf(b);
+    if (st !== b.stage) {
+      b.stage = st;
+      b.events.push({ time: r2(this.simTime), type: 'stage', stage: st, word: STAGE_WORD[st] });
+    }
+    if (!b.dead && b.age >= this.lifespan(b)) b.dead = 'Altersschwäche';
+    if (b.offer && b.offer.until < this.simTime) b.offer = null;
+  }
+
+  /** Warum b (noch) kein Kind bekommen kann, oder null. */
+  private mateProblem(b: Body, self: boolean): string | null {
+    const who = self ? 'Du bist' : `${b.name} ist`;
+    if (b.stage === 'child') return `${who} noch ein Kind.`;
+    if (b.stage === 'old') return `${who} zu alt.`;
+    if (b.age < b.nextBirthAge) return `${self ? 'Du hattest' : `${b.name} hatte`} erst ein Kind; wieder möglich in ${Math.ceil((b.nextBirthAge - b.age) / 60)} min.`;
+    if (b.needs.hunger >= 0.6) return `${who} zu hungrig.`;
+    if (b.needs.thirst >= 0.6) return `${who} zu durstig.`;
+    if (b.needs.joy < 0.5) return `${who} nicht froh genug (Freude ${r2(b.needs.joy)}, nötig 0.5).`;
+    return null;
+  }
+
+  /** Fortpflanzung braucht die Zustimmung beider: Beide rufen reproduce mit dem anderen auf. */
+  reproduce(id: string, data: { name?: unknown }) {
+    const b = this.need(id);
+    const name = String(data?.name ?? '').trim();
+    if (!name) return { ok: false, error: 'name fehlt: Mit wem möchtest du ein Kind?' };
+    const o = [...this.bodies.values()].find((x) => x.name.toLowerCase() === name.toLowerCase());
+    if (!o) return { ok: false, error: `"${name}" gibt es nicht.` };
+    if (o === b) return { ok: false, error: 'Dafür braucht es zwei.' };
+    const pa = b.body.translation(), pb = o.body.translation();
+    const dist = Math.hypot(pa.x - pb.x, pa.y - pb.y, pa.z - pb.z);
+    if (dist > MATE_RANGE) return { ok: false, error: `${o.name} ist zu weit weg (${r2(dist)}, höchstens ${MATE_RANGE}). Geht näher zusammen.` };
+    const mine = this.mateProblem(b, true);
+    if (mine) return { ok: false, error: mine };
+    if (o.stage !== 'adult') return { ok: false, error: this.mateProblem(o, false)! };
+    if (o.offer?.to !== b.id || o.offer.until < this.simTime) {
+      b.offer = { to: o.id, until: this.simTime + OFFER_TIME };
+      o.events.push({ time: r2(this.simTime), type: 'reproduce_request', from: b.name, expires_in: OFFER_TIME });
+      this.interruptWaits(o, 'reproduce_request');
+      return { ok: true, waiting_for: o.name, expires_in: OFFER_TIME, hint: `${o.name} muss innerhalb von ${OFFER_TIME} Sekunden ebenfalls Reproduce mit dir aufrufen.` };
+    }
+    // beide wollen: jetzt zählt auch der Zustand des anderen
+    const theirs = this.mateProblem(o, false);
+    if (theirs) return { ok: false, error: theirs };
+    const dx = pb.x - pa.x, dz = pb.z - pa.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const mid: Vec3 = [(pa.x + pb.x) / 2, Math.max(pa.y, pb.y), (pa.z + pb.z) / 2];
+    // neben die Eltern statt zwischen sie, falls dort Boden ist
+    const side: Vec3 = [mid[0] - (dz / len) * 1.3, mid[1] + 0.2, mid[2] + (dx / len) * 1.3];
+    const pos: Vec3 = this.safeGround(b, side[0], side[2]) ? side : [mid[0], mid[1] + 1.8, mid[2]];
+    let child: { id: string; name: string } | undefined;
+    try { child = this.onBirth?.(b.id, o.id, pos); } catch (e: any) { return { ok: false, error: `Geburt gescheitert: ${e?.message || e}` }; }
+    if (!child) return { ok: false, error: 'In dieser Welt können keine Kinder entstehen.' };
+    b.offer = null;
+    o.offer = null;
+    for (const x of [b, o]) {
+      x.nextBirthAge = x.age + BIRTH_COOLDOWN;
+      x.needs.hunger = clamp01(x.needs.hunger + 0.2); // ein Kind kostet Kraft
+      x.cheer = Math.min(1, x.cheer + 0.5);
+    }
+    const t = r2(this.simTime);
+    b.events.push({ time: t, type: 'birth', child: child.name, partner: o.name });
+    o.events.push({ time: t, type: 'birth', child: child.name, partner: b.name });
+    this.interruptWaits(o, 'birth');
+    return { ok: true, child: child.name };
+  }
+
+  /** Entfernt einen gestorbenen Körper und sagt es denen, die es erfahren. */
+  private kill(b: Body) {
+    const cause = b.dead!;
+    const p = b.body.translation();
+    const at = { x: p.x, y: p.y, z: p.z };
+    const info = { name: b.name, cause, age_min: r2(b.age / 60) };
+    if (b.plan?.status === 'running') b.plan.status = 'cancelled';
+    this.interruptWaits(b, 'death');
+    this.removeBody(b.id);
+    const t = r2(this.simTime);
+    for (const o of this.bodies.values()) {
+      if (o.offer?.to === b.id) o.offer = null;
+      const q = o.body.translation();
+      const dist = Math.hypot(q.x - at.x, q.y - at.y, q.z - at.z);
+      // Familie erfährt es überall, alle anderen nur in Hörweite
+      const relation = o.parents.some((x) => x.id === b.id) ? 'Elternteil' : b.parents.some((x) => x.id === o.id) ? 'Kind' : null;
+      if (!relation && this.hearRange > 0 && dist > this.hearRange) continue;
+      o.events.push({ time: t, type: 'death', name: b.name, cause, age_min: info.age_min, distance: r2(dist), ...(relation ? { relation } : {}) });
+      o.grief = Math.min(1, o.grief + (relation ? 0.6 : 0.15));
+      this.interruptWaits(o, 'death');
+    }
+    this.onDeath?.(b.id, info);
   }
 
   removeBody(id: string) {
@@ -447,7 +594,8 @@ export class World {
     const dir = asVec3(data?.direction, 'direction');
     const len = Math.hypot(...dir);
     if (len < 1e-6) return { ok: false, error: 'direction darf nicht [0,0,0] sein.' };
-    const speed = Math.max(0, Math.min(MAX_THROW, Number(data?.speed) || 0));
+    const max = b.stage === 'child' ? MAX_THROW * 0.5 : MAX_THROW;
+    const speed = Math.max(0, Math.min(max, Number(data?.speed) || 0));
     const n: Vec3 = [dir[0] / len, dir[1] / len, dir[2] / len];
     const p = b.body.translation();
     const pv = b.body.linvel();
@@ -861,7 +1009,8 @@ export class World {
     // Langeweile sinkt, wenn man sich bewegt (Neues sieht), steigt sonst
     n.boredom = clamp01(n.boredom + (walking ? -BORED_RATE * 1.2 : BORED_RATE) * DT);
     b.cheer = Math.max(0, b.cheer - DT / 60);
-    const target = clamp01(0.85 - 0.5 * n.hunger - 0.5 * n.thirst - 0.4 * n.boredom + b.cheer * 0.4);
+    b.grief = Math.max(0, b.grief - DT / 600);
+    const target = clamp01(0.85 - 0.5 * n.hunger - 0.5 * n.thirst - 0.4 * n.boredom + b.cheer * 0.4 - b.grief * 0.6);
     n.joy = clamp01(n.joy + (target - n.joy) * Math.min(1, DT * 0.1));
     if (n.boredom >= 1) n.joy = Math.max(0, n.joy - 0.1 * DT);
     let dmg = 0;
@@ -876,11 +1025,12 @@ export class World {
         this.interruptWaits(b, 'need_urgent');
       } else if (b.urgent[k] && n[k] < 0.6) b.urgent[k] = false;
     }
-    if (n.health <= 0 && !b.exhausted) {
-      // Der Tod folgt mit dem Lebenszyklus (Schritt 3); bis dahin nur eine Meldung
-      b.exhausted = true;
-      b.events.push({ time: r2(this.simTime), type: 'health_zero' });
-    } else if (n.health > 0.2) b.exhausted = false;
+    if (!b.healthLow && n.health < 0.3) {
+      b.healthLow = true;
+      b.events.push({ time: r2(this.simTime), type: 'health_low', word: this.word('health', n.health) });
+      this.interruptWaits(b, 'health_low');
+    } else if (b.healthLow && n.health > 0.45) b.healthLow = false;
+    if (n.health <= 0 && !b.dead) b.dead = n.thirst >= 1 ? 'verdurstet' : n.hunger >= 1 ? 'verhungert' : 'erschöpft';
   }
 
   private tickSources() {
@@ -985,6 +1135,7 @@ export class World {
 
   private step() {
     for (const b of this.bodies.values()) {
+      this.tickLife(b);
       this.tickNeeds(b);
       if (b.plan?.status === 'running') this.advance(b);
       else this.idleBody(b);
@@ -1017,6 +1168,7 @@ export class World {
         b.events.push({ time: r2(this.simTime), type: 'fell_off_world', respawned_at: b.spawn });
       }
     }
+    for (const b of [...this.bodies.values()]) if (b.dead) this.kill(b);
 
     if (this.waiters.length) {
       const due = this.waiters.filter((w) => w.until <= this.simTime);
@@ -1063,7 +1215,8 @@ export class World {
             b.events.push({ time: r2(this.simTime), type: 'blocked', ...b.block });
           }
         }
-        const s = Math.min(b.auto ? WALK_SPEED * 0.35 : WALK_SPEED, d / DT);
+        const walk = b.stage === 'old' ? WALK_SPEED * 0.7 : WALK_SPEED;
+        const s = Math.min(b.auto ? walk * 0.35 : walk, d / DT);
         vx = (dx / d) * s;
         vz = (dz / d) * s;
         b.lookYaw = Math.atan2(dx, dz);
@@ -1138,6 +1291,7 @@ export class World {
       b.holding = null;
       if (b.plan?.status === 'running') b.plan.status = 'cancelled';
       b.auto = false;
+      b.offer = null;
       this.respawn(b);
       b.events.push({ time: r2(this.simTime), type: 'world_reset' });
     }
@@ -1219,7 +1373,7 @@ export class World {
       entities.push({
         name: other.name, entity_type: 'agent', shape: 'capsule', anchored: false,
         position: rv3(other.body.translation()), size: [P_RAD * 2, (P_HALF + P_RAD) * 2, P_RAD * 2],
-        color: other.color, holding: other.holding?.name ?? null,
+        color: other.color, holding: other.holding?.name ?? null, stage: other.stage,
       });
     }
     return {
@@ -1236,6 +1390,7 @@ export class World {
         move: { status: b.move, ...(b.target ? { target: b.target } : {}), ...(b.block || {}) },
         plan: this.planInfo(b),
         needs: this.needsInfo(b),
+        life: this.lifeInfo(b),
         ...(b.auto ? { autopilot: 'schlendert ein paar Schritte' } : {}),
       },
       events: b.events.splice(0),
@@ -1244,12 +1399,25 @@ export class World {
     };
   }
 
+  private lifeInfo(b: Body) {
+    const children = [...this.bodies.values()].filter((x) => x.parents.some((p) => p.id === b.id)).map((x) => x.name);
+    const offers = [...this.bodies.values()].filter((x) => x.offer?.to === b.id && x.offer.until >= this.simTime)
+      .map((x) => ({ from: x.name, expires_in: r2(x.offer!.until - this.simTime) }));
+    return {
+      age_min: Math.round(b.age / 60), stage: b.stage, word: STAGE_WORD[b.stage],
+      ...(b.parents.length ? { parents: b.parents.map((p) => p.name) } : {}),
+      ...(children.length ? { children } : {}),
+      ...(offers.length ? { reproduce_offers: offers } : {}),
+      ...(b.offer && b.offer.until >= this.simTime ? { waiting_for: this.bodies.get(b.offer.to)?.name } : {}),
+    };
+  }
+
   /** Kompakter Zustand für die 3D-Ansicht. */
   snapshot() {
     const now = performance.now();
     const agents = [...this.bodies.values()].map((b) => {
       const p = b.body.translation();
-      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, n: [r2(b.needs.hunger), r2(b.needs.thirst), r2(b.needs.boredom), r2(b.needs.joy), r2(b.needs.health)], in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
+      return { st: this.lockstep ? this.stateOf(b, now) : null, id: b.id, name: b.name, color: b.color, p: [r2(p.x), r2(p.y - P_FOOT), r2(p.z)], yaw: r2(b.yaw), holding: b.holding?.id ?? null, moving: !!b.target, grounded: b.grounded, n: [r2(b.needs.hunger), r2(b.needs.thirst), r2(b.needs.boredom), r2(b.needs.joy), r2(b.needs.health)], g: b.stage, ag: Math.floor(b.age / 60), sc: r2(this.scaleOf(b)), in: b.plan?.status === 'running' ? b.plan.intent || b.plan.steps[b.plan.idx]?.type || '' : '' };
     });
     const objs = this.objs.filter((o) => !o.lost).map((o) => {
       const holder = o.heldBy ? this.bodies.get(o.heldBy) : null;
