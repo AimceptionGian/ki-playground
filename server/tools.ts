@@ -19,8 +19,8 @@ export const TOOLS: ToolDef[] = [
   { name: 'pickup', description: 'Nimm ein Objekt in Reichweite auf: das nächste zur Position oder das mit dem Namen.', parameters: { type: 'object', properties: { position: vec, name: { type: 'string' } } } },
   { name: 'place', description: 'Setz das gehaltene Objekt an eine Position in deiner Nähe. rotation in Grad [rx, ry, rz], optional.', parameters: { type: 'object', properties: { position: vec, rotation: vec }, required: ['position'] } },
   { name: 'throw', description: 'Wirf das gehaltene Objekt in eine Richtung [x, y, z] mit einer Geschwindigkeit.', parameters: { type: 'object', properties: { direction: vec, speed: { type: 'number' } }, required: ['direction', 'speed'] } },
-  { name: 'say', description: 'Sag etwas. Alle in der Welt hören es.', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
-  { name: 'wait', description: 'Warte einige Sekunden Weltzeit (höchstens 30) und beobachte dich danach.', parameters: { type: 'object', properties: { seconds: { type: 'number' } }, required: ['seconds'] } },
+  { name: 'say', description: 'Sag etwas. Wer in Hörweite ist, hört es.', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+  { name: 'wait', description: 'Warte einige Sekunden Weltzeit (höchstens 30) und beobachte dich danach. Endet vorzeitig, wenn jemand in Hörweite spricht.', parameters: { type: 'object', properties: { seconds: { type: 'number' } }, required: ['seconds'] } },
   { name: 'list_files', description: 'Liste die Dateien in deinem Arbeitsordner.', parameters: { type: 'object', properties: {} }, files: true },
   { name: 'read_file', description: 'Lies eine Datei aus deinem Arbeitsordner.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }, files: true },
   { name: 'write_file', description: 'Schreib eine Datei in deinem Arbeitsordner (ersetzt den Inhalt).', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] }, files: true },
@@ -61,8 +61,9 @@ export async function runTool(world: World, store: AgentStore, agent: Agent, nam
         break;
       case 'wait': {
         const s = Math.max(0, Math.min(30, Number(args.seconds) || 0));
-        await world.waitSim(s, agent.id);
-        result = { ok: true, waited: s };
+        const start = world.simTime;
+        const interrupted = await world.waitSim(s, agent.id);
+        result = { ok: true, waited: Math.round((world.simTime - start) * 100) / 100, ...(interrupted ? { interrupted_by: 'speech' } : {}) };
         break;
       }
       default: return { ok: false, error: `Unbekannte Aktion: ${name}` };

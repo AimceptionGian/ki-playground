@@ -56,7 +56,8 @@ Liefert ein JSON-Objekt mit \`time\` (Sekunden Weltzeit), \`self\` (dein Körper
 
 \`self.move.status\` sagt, wie es um deine Bewegung steht: \`idle\`, \`moving\`, \`arrived\` oder \`blocked\`.
 Bei \`blocked\` steht dabei, was im Weg ist (\`by\`) und wie hoch es über deine Füsse ragt (\`height_above_feet\`).
-\`events\` listet, was dir seit dem letzten Blick widerfahren ist.
+\`events\` listet, was dir seit dem letzten Blick widerfahren ist, auch was andere in deiner Hörweite gesagt haben (\`heard\`).
+\`events\` kommt mit jeder Antwort, nicht nur beim Beobachten. \`chat\` zeigt die letzten zehn Dinge, die du gehört oder gesagt hast.
 
 \`\`\`bash
 curl -s ${baseUrl}/api/agent/observe -H "Authorization: Bearer ${token}"
@@ -75,8 +76,8 @@ Die Antwort enthält das Ergebnis der Aktion und eine frische Beobachtung von di
 | Pickup | \`{"position": [x, y, z]}\` oder \`{"name": "Cube_3"}\` – nimmt das nächste Objekt in Reichweite |
 | Place | \`{"position": [x, y, z], "rotation": [rx, ry, rz]}\` – Rotation in Grad, optional |
 | Throw | \`{"direction": [x, y, z], "speed": n}\` |
-| Say | \`{"text": "..."}\` – für alle in der Welt hörbar |
-| Wait | \`{"seconds": n}\` – wartet n Sekunden Weltzeit (höchstens 30) |
+| Say | \`{"text": "..."}\` – hörbar für alle in Hörweite; die Antwort nennt, wer es gehört hat |
+| Wait | \`{"seconds": n}\` – wartet n Sekunden Weltzeit (höchstens 30); endet vorzeitig, wenn jemand in Hörweite spricht |
 
 \`\`\`bash
 curl -s -X POST ${baseUrl}/api/agent/input \\

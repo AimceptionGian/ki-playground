@@ -44,6 +44,7 @@ interface Body {
   bestD: number; // kleinster bisher erreichter Abstand zum Ziel
   stuck: number; // Sekunden ohne Fortschritt am Boden
   events: Record<string, unknown>[]; // was seit der letzten Beobachtung passiert ist
+  heard: { time: number; from: string; text: string }[]; // was dieser Agent gehört oder selbst gesagt hat
 }
 
 const DT = 1 / 60;
@@ -110,7 +111,7 @@ export class World {
   private bodies = new Map<string, Body>();
   private nextId = 1;
   private debt = 0;
-  private waiters: { until: number; resolve: () => void; id?: string }[] = [];
+  private waiters: { until: number; resolve: (interrupted: boolean) => void; id?: string }[] = [];
   private released = false;
   private runWaiters: (() => void)[] = [];
   private rockCooldown = 0;
@@ -123,6 +124,8 @@ export class World {
   /** Form des Felsens: kantiger Block (bleibt liegen) oder Kugel (rollt). */
   rockShape: 'block' | 'ball' = 'block';
   /** Wartemodus: Die Zeit läuft nur, solange alle beteiligten Agenten in einem Wait stehen. */
+  /** Wie weit Gesprochenes zu hören ist, in Einheiten. 0 = überall. */
+  hearRange = 30;
   lockstep = false;
   /** Überlegt ein Agent länger als so viele Sekunden (Echtzeit), läuft die Welt ohne ihn weiter. */
   thinkTimeout = 60;
@@ -231,7 +234,7 @@ export class World {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(...spawn).lockRotations().setCcdEnabled(true),
     );
     this.rw.createCollider(RAPIER.ColliderDesc.capsule(P_HALF, P_RAD).setFriction(0).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min).setDensity(1.2), body);
-    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [] });
+    this.bodies.set(id, { id, name, color, body, target: null, yaw: 0, holding: null, grounded: false, spawn, waits: 0, lastAct: 0, driven: false, move: 'idle', block: null, bestD: Infinity, stuck: 0, events: [], heard: [] });
   }
 
   removeBody(id: string) {
@@ -377,9 +380,36 @@ export class World {
     const b = this.need(id);
     const t = String(text ?? '').slice(0, 500);
     if (!t) return { ok: false, error: 'text fehlt' };
-    this.chat.push({ time: r2(this.simTime), from: b.name, text: t });
+    const msg = { time: r2(this.simTime), from: b.name, text: t };
+    this.chat.push(msg);
     if (this.chat.length > 50) this.chat.shift();
-    return { ok: true };
+    b.heard.push(msg);
+    const p = b.body.translation();
+    const heardBy: string[] = [];
+    for (const o of this.bodies.values()) {
+      if (o === b) continue;
+      const q = o.body.translation();
+      const dist = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z);
+      if (this.hearRange > 0 && dist > this.hearRange) continue;
+      o.heard.push(msg);
+      if (o.heard.length > 30) o.heard.shift();
+      o.events.push({ time: msg.time, type: 'heard', from: b.name, text: t, distance: r2(dist) });
+      heardBy.push(o.name);
+      this.interruptWaits(o);
+    }
+    if (b.heard.length > 30) b.heard.shift();
+    return { ok: true, heard_by: heardBy };
+  }
+
+  /** Wer angesprochen wird, während er wartet, wird sofort geweckt. */
+  private interruptWaits(b: Body) {
+    if (!b.waits) return;
+    const mine = this.waiters.filter((w) => w.id === b.id);
+    this.waiters = this.waiters.filter((w) => w.id !== b.id);
+    b.waits = 0;
+    b.lastAct = performance.now();
+    this.released = true;
+    mine.forEach((w) => w.resolve(true));
   }
 
   private release(b: Body, pos: Vec3, rot: { x: number; y: number; z: number; w: number } | null, vel: Vec3) {
@@ -449,7 +479,7 @@ export class World {
         for (const w of due) {
           const b = w.id ? this.bodies.get(w.id) : undefined;
           if (b) { b.waits = Math.max(0, b.waits - 1); b.lastAct = now; this.released = true; }
-          w.resolve();
+          w.resolve(false);
         }
       }
     }
@@ -585,7 +615,8 @@ export class World {
   }
 
   /** Wartet eine Spanne in Simulationszeit (läuft bei Pause nicht weiter). */
-  waitSim(seconds: number, id?: string): Promise<void> {
+  /** Liefert true, wenn das Warten vorzeitig endete, weil jemand in Hörweite gesprochen hat. */
+  waitSim(seconds: number, id?: string): Promise<boolean> {
     const b = id ? this.bodies.get(id) : undefined;
     if (b) b.waits++;
     return new Promise((resolve) => this.waiters.push({ until: this.simTime + seconds, resolve, id: b ? id : undefined }));
@@ -644,7 +675,7 @@ export class World {
         move: { status: b.move, ...(b.target ? { target: b.target } : {}), ...(b.block || {}) },
       },
       events: b.events.splice(0),
-      chat: this.chat.slice(-10),
+      chat: b.heard.slice(-10),
       entities,
     };
   }

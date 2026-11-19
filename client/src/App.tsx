@@ -59,6 +59,7 @@ export function App() {
   const [baseUrl, setBaseUrl] = useState('');
   const [meta, setMeta] = useState({ time: 0, paused: true, speed: 1, resetIn: null as number | null, hold: [] as string[], states: {} as Record<string, string | null> });
   const [lockstep, setLockstep] = useState(false);
+  const [hearRange, setHearRange] = useState(30);
   const [resetMin, setResetMin] = useState(60);
   const [rockShape, setRockShape] = useState('block');
   const [selected, setSelected] = useState<string | null>(null);
@@ -76,6 +77,7 @@ export function App() {
     setResetMin(s.world.resetIntervalMin);
     setRockShape(s.world.rockShape);
     setLockstep(!!s.world.lockstep);
+    setHearRange(s.world.hearRange ?? 30);
     scene.current?.setStatics(s.statics);
   }, []);
 
@@ -180,6 +182,10 @@ export function App() {
         <label className="num">
           <input type="number" min={0} value={resetMin} onChange={(e) => setResetMin(Number(e.target.value))} onBlur={() => control({ resetIntervalMin: resetMin })} />
           <small>Reset alle … min (0 = nie)</small>
+        </label>
+        <label className="num">
+          <input type="number" min={0} value={hearRange} onChange={(e) => setHearRange(Number(e.target.value))} onBlur={() => control({ hearRange })} />
+          <small>Hörweite (0 = überall)</small>
         </label>
         <label className="num">
           <select value={lockstep ? '1' : '0'} onChange={(e) => { setLockstep(e.target.value === '1'); control({ lockstep: e.target.value === '1' }); }}>
