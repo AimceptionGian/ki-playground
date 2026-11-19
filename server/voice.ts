@@ -2,12 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { detect } from 'tinyld';
 import { DATA_ROOT } from './agents.ts';
 
 /**
  * Stimmen mit Piper (lokal). Ohne Piper oder ohne Modell bleibt alles stumm und nichts bricht.
  * Suche: PIPER_BIN (sonst `data/piper/venv/Scripts/piper.exe`, sonst `piper` im PATH),
- * Modelle: alle `*.onnx` in PIPER_MODELS (sonst `data/piper/models`).
+ * Modelle: alle `*.onnx` in PIPER_MODELS (sonst `data/piper/models`), Sprache aus `language.family` im JSON.
+ * Jede Äusserung wird auf Deutsch oder Englisch erkannt (tinyld) und mit einem Modell dieser Sprache gesprochen.
+ * Ein Bot behält über Sprachen hinweg seinen Platz: Modelle je Sprache nach Dateiname sortiert, Platz = Hash der Id
+ * (eva_k ↔ amy weiblich, thorsten ↔ ryan männlich).
  */
 const PIPER_DIR = path.join(DATA_ROOT, 'piper');
 const MODELS = process.env.PIPER_MODELS || path.join(PIPER_DIR, 'models');
@@ -24,7 +28,7 @@ const hash = (s: string) => crypto.createHash('sha1').update(s).digest().readUIn
 export class Voices {
   readonly dir = OUT;
   private bin: string | null = null;
-  private models: { file: string; speakers: number }[] = [];
+  private models: { file: string; speakers: number; lang: string }[] = [];
   private queue: (() => Promise<void>)[] = [];
   private busy = false;
   private warned = false;
@@ -49,17 +53,25 @@ export class Voices {
     try {
       return fs.readdirSync(MODELS).filter((f) => f.endsWith('.onnx')).sort().map((f) => {
         let speakers = 1;
-        try { speakers = JSON.parse(fs.readFileSync(path.join(MODELS, f + '.json'), 'utf8')).num_speakers || 1; } catch { /* ohne Metadaten: ein Sprecher */ }
-        return { file: path.join(MODELS, f), speakers };
+        let lang = f.slice(0, 2).toLowerCase(); // ohne Metadaten: aus dem Dateinamen (de_DE-…)
+        try {
+          const j = JSON.parse(fs.readFileSync(path.join(MODELS, f + '.json'), 'utf8'));
+          speakers = j.num_speakers || 1;
+          lang = j.language?.family || lang;
+        } catch { /* ohne Metadaten: ein Sprecher */ }
+        return { file: path.join(MODELS, f), speakers, lang };
       });
     } catch { return []; }
   }
 
   /** Stimme eines Bots, stabil aus der Id; Kinder höher, Alte etwas tiefer. */
-  voiceFor(id: string, stage: Stage): Voice | null {
+  voiceFor(id: string, stage: Stage, lang = 'de'): Voice | null {
     if (!this.models.length) return null;
     const h = hash(id);
-    const m = this.models[h % this.models.length];
+    const own = this.models.filter((m) => m.lang === lang);
+    const de = this.models.filter((m) => m.lang === 'de');
+    const list = own.length ? own : de.length ? de : this.models;
+    const m = list[h % list.length];
     const speaker = m.speakers > 1 ? (h >>> 8) % m.speakers : null;
     const length = 0.9 + ((h >>> 16) % 25) / 100; // Sprechtempo 0.90–1.14
     const base = 0.9 + ((h >>> 20) % 21) / 100; // Tonlage 0.90–1.10
@@ -69,7 +81,7 @@ export class Voices {
 
   /** Erzeugt die WAV im Hintergrund und ruft danach `done` auf. Stumm, wenn Piper fehlt. */
   say(id: string, text: string, stage: Stage, done: (s: Spoken) => void) {
-    const v = this.voiceFor(id, stage);
+    const v = this.voiceFor(id, stage, this.langOf(text));
     if (!v || !this.bin) return;
     if (this.queue.length >= MAX_QUEUE) return;
     this.queue.push(async () => {
@@ -77,6 +89,12 @@ export class Voices {
       if (await this.run(v, text, path.join(OUT, name))) done({ url: `/voices/${name}`, rate: v.rate });
     });
     void this.pump();
+  }
+
+  /** Deutsch oder Englisch? Unklar (z. B. „Okay!“) zählt als Deutsch. */
+  private langOf(text: string): string {
+    if (!this.models.some((m) => m.lang === 'en')) return 'de';
+    try { return detect(text, { only: ['de', 'en'] }) || 'de'; } catch { return 'de'; }
   }
 
   private async pump() {
@@ -90,7 +108,9 @@ export class Voices {
       const args = ['-m', v.model, '-f', out, '--length-scale', String(v.length)];
       if (v.speaker !== null) args.push('-s', String(v.speaker));
       let p;
-      try { p = spawn(this.bin!, args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true }); } catch { return resolve(this.fail('Start fehlgeschlagen')); }
+      // Piper ist Python: unter Windows läse es stdin sonst als cp1252, und aus „ü“ würde „Ã¼“
+      const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+      try { p = spawn(this.bin!, args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true, env }); } catch { return resolve(this.fail('Start fehlgeschlagen')); }
       let err = '';
       p.stderr.on('data', (d) => { if (err.length < 400) err += d; });
       p.on('error', (e) => resolve(this.fail(e.message)));

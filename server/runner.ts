@@ -26,10 +26,30 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ' …' : 
 
 const HARNESS_NOTE = `Du bist in dieser Sitzung kein Assistent, der auf Aufträge wartet. Du hast einen Körper in einer simulierten Welt.
 Dein Arbeitsordner gehört dir und überdauert jede Sitzung; dein Kontext nicht.
-Lies zuerst SOUL.md, SEMANTIC_MEMORY.md und EPISODIC_MEMORY.md (steht SOUL.md schon unten, genügen die beiden anderen).
+Dein Gedächtnis (SOUL.md unten, SEMANTIC_MEMORY.md und deine letzten Erinnerungen in der ersten Nachricht) bekommst du
+zu Beginn jeder Sitzung mitgeliefert; ältere Erinnerungen liest du nur bei Bedarf selbst nach.
 Dein Körper handelt selbständig nach Plänen (Act). Gib ihm mehrere Schritte auf einmal und denk weiter, während er handelt.`;
 
 const MCP_NAME = 'welt'; // Werkzeuge heissen in Claude Code dann mcp__welt__act usw.
+const MEM_SEMANTIC = 8000; // Zeichen von SEMANTIC_MEMORY.md im Start-Prompt
+const MEM_EPISODES = 15; // so viele letzte Erinnerungen aus EPISODIC_MEMORY.jsonl
+const MEM_EPISODIC = 5000; // höchstens so viele Zeichen davon
+
+/** Erste Nachricht einer Sitzung: Start-Prompt plus Gedächtnis, damit der Geist nicht erst Dateien lesen muss. */
+function startPrompt(store: AgentStore, agent: Agent, base: string): string {
+  const read = (p: string) => { try { return store.readFile(agent, p); } catch { return ''; } };
+  const semantic = read('SEMANTIC_MEMORY.md').trim();
+  const lines = read('EPISODIC_MEMORY.jsonl').split('\n').filter((l) => l.trim());
+  let recent = lines.slice(-MEM_EPISODES).join('\n');
+  if (recent.length > MEM_EPISODIC) recent = '…' + recent.slice(-MEM_EPISODIC);
+  const parts = [base, 'Dein Gedächtnis (schon gelesen, du musst es nicht nochmals öffnen):'];
+  parts.push(`## SEMANTIC_MEMORY.md\n\n${semantic ? clip(semantic, MEM_SEMANTIC) : '(leer)'}`);
+  parts.push(lines.length
+    ? `## Letzte Erinnerungen (EPISODIC_MEMORY.jsonl, die neusten ${Math.min(MEM_EPISODES, lines.length)} von ${lines.length})\n\n${recent}`
+    : '## Erinnerungen\n\n(noch keine)');
+  return parts.join('\n\n');
+}
+
 const FILE_TOOLS = TOOLS.filter((t) => t.files).map((t) => t.name);
 const WORLD_TOOLS = TOOLS.filter((t) => !t.files).map((t) => t.name);
 
@@ -125,7 +145,7 @@ export class Runners {
           try { soul = store.readFile(agent, 'SOUL.md'); } catch {}
           messages = [
             { role: 'system', content: `${HARNESS_NOTE}\nDu handelst ausschliesslich über deine Werkzeuge.\n\n${soul}` },
-            { role: 'user', content: woke ? `Du bist aufgewacht. ${agent.beginPrompt}` : agent.beginPrompt },
+            { role: 'user', content: startPrompt(store, agent, woke ? `Du bist aufgewacht. ${agent.beginPrompt}` : agent.beginPrompt) },
           ];
           woke = false;
           sessionStart = world.simTime;
@@ -334,7 +354,7 @@ export class Runners {
           resets = world.resetCount;
           log('system', 'Neue Sitzung – Kontext geleert');
         }
-        const prompt = fresh ? (woke ? `Du bist aufgewacht. ${agent.beginPrompt}` : agent.beginPrompt) : agent.continuePrompt;
+        const prompt = fresh ? startPrompt(store, agent, woke ? `Du bist aufgewacht. ${agent.beginPrompt}` : agent.beginPrompt) : agent.continuePrompt;
         woke = false;
         const code = await runOnce(prompt, !fresh);
         if (!alive) break;

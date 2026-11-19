@@ -18,6 +18,9 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Bewegung: Server beschleunigt (`ACCEL`/`DECEL`, `Body.mv`); Client leitet Geh-Phase aus Tempo ab, Snapshot trägt `ly`
 - Stimmen: Piper lokal im venv `data/piper/venv`, Modelle `data/piper/models` (thorsten-medium, eva_k-x_low; gitignored);
   Stimme stabil aus Hash der Id, Kinder Rate ×1.3, Alte ×0.94; Tonhöhe = Abspielrate im Browser; ohne Piper stumm
+- Stimmen zweisprachig: Sprache pro Äusserung mit `tinyld` (de/en, unklar = de); englische Modelle en_US-amy/ryan-medium
+  (gleicher Platz je Sprache: eva_k↔amy, thorsten↔ryan); Piper mit `PYTHONUTF8=1`, sonst kaputte Umlaute (cp1252)
+- Sitzungsstart: SEMANTIC_MEMORY.md und die letzten 15 Erinnerungen stehen direkt im Start-Prompt (`startPrompt` in runner.ts)
 - Bevölkerung über Alterung und Härte statt Obergrenze
 - Schlaf = natürliches Leeren des Kontexts: Traum-Lauf ordnet das Gedächtnis, danach frische Sitzung (Gians Idee)
 
@@ -35,7 +38,10 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Ungeprüft: Runner „api" nutzt `worldRules()` noch nicht (System-Prompt ohne Weltregeln) – Nebenbefund
 - Erledigt: Energie, Schlaf und Träumen (Gedächtnis ordnen im Schlaf, danach frischer Kontext), siehe docs/geist-tempo.md
 - Ungeprüft: Schlafpose im Browser (liegt auf dem Rücken, Augen zu, Energie-Balken)
-- Offen: Gedächtnis in den Aufwach-Prompt legen (spart ~4 s Leserunden); C langlebiger Prozess gegen ~2.7 s Neustart
+- Erledigt: Gedächtnis im Start-Prompt (Test: erstes `act` nach 1.6 s, keine Leserunden mehr)
+- Erledigt: Umlaute (Phoneme geprüft: „Grüsse“ → ɡ r ʏ s ə) und Englisch (eigene Stimme, WAV erzeugt)
+- Ungeprüft: englische Stimmen im Browser anhören
+- Offen: Geist schreibt tagsüber trotz Traum noch ab und zu ins Gedächtnis; C langlebiger Prozess gegen ~2.7 s Neustart
 
 ## Nächster Schritt
 1. Browser-Test (siehe „Ungeprüft") mit zwei Agenten durchführen; Fehler beheben. Danach Nebenpunkte aus „Offen"
