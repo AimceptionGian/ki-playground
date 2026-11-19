@@ -10,6 +10,8 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Fork `AimceptionGian/ki-playground` (öffentlich); `origin` = Fork, `stefan` = Original, nie dorthin pushen
 - Körper/Geist-Trennung: Modell schickt Pläne (`act`), Server führt sie mit Reflexen aus
 - Eigenpläne des Körpers (`plan.auto`) wecken den Geist nicht und zählen nicht als „wartet"
+- Nach `plan_done`/`plan_failed` des Geistes 10 s Vortritt (`MIND_GRACE`), erst dann Eigenplan; Event trägt
+  `needs` (Hunger/Durst ≥ 0.4 als Wort) und `body` (Ankündigung, wenn ≥ 0.55) – gegen „Körper kämpft mit Geist"
 - Lebenszyklus: Stufen relativ zum eigenen Höchstalter (Kind < 15 %, alt ≥ 75 %); Gründer starten bei 25 %
 - Kinder nur optisch kleiner; SOUL.md des Kindes = Absätze beider Eltern gemischt
 - Ids aus `data/graveyard/` werden nie wiederverwendet
@@ -27,6 +29,8 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 - Ungeprüft: Browser-Darstellung Schritt 4 (Wippen, Kopf dreht zum Ziel, Idle-Atmen)
 - Ungeprüft: echter Lauf mit Claude-Code-Agenten (`Act`/`eat`/`drink`/`Reproduce`, Tod → `claude.exe` endet, Grab)
 - Offen: Runner „eigener Endpunkt" nur per API; kein Friedhof in der Oberfläche; kein Stumm-Schalter in der UI
+- Offen: Geist denkt langsam (jede Aktion = Bash/curl-Runde, `claude.exe` startet pro Lauf neu mit `--continue`);
+  Ideen: Modell fest auf Haiku/Sonnet, Tools per MCP statt curl, längere Pläne anregen
 
 ## Nächster Schritt
 1. Browser-Test (siehe „Ungeprüft") mit zwei Agenten durchführen; Fehler beheben. Danach Nebenpunkte aus „Offen"

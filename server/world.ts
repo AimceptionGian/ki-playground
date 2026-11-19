@@ -118,6 +118,9 @@ const HUNGER_RATE = 1 / 600;
 const THIRST_RATE = 1 / 360;
 const BORED_RATE = 1 / 300;
 const URGENT = 0.8;
+const AUTO_NEED = 0.55; // ab hier sucht der Körper im Leerlauf selbst Essen oder Wasser
+const NEED_HINT = 0.4; // ab hier erwähnt plan_done/plan_failed Hunger bzw. Durst
+const MIND_GRACE = 10; // Sekunden Weltzeit nach Planende, in denen der Körper dem Geist den Vortritt lässt
 const BERRY_FOOD = 0.3; // so viel Hunger stillt eine Beere
 const EAT_EVERY = 0.8; // Sekunden pro Beere
 const DRINK_RATE = 0.4; // Durst, der pro Sekunde sinkt
@@ -734,7 +737,14 @@ export class World {
     if (p.auto) { b.autoCool = this.simTime + (status === 'failed' ? 15 : 3); return; }
     // im Wartemodus ist der Agent ab jetzt wieder am Zug: den laufenden Zeitschub hier beenden
     this.released = true;
-    b.events.push({ time: r2(this.simTime), type: status === 'done' ? 'plan_done' : 'plan_failed', plan_id: p.id, intent: p.intent, ...(error ? { step: p.idx + 1, error } : {}) });
+    // der Geist ist am Zug: der Körper wartet kurz, bevor er selbst essen oder trinken geht
+    b.autoCool = Math.max(b.autoCool, this.simTime + MIND_GRACE);
+    const needs: Record<string, string> = {};
+    for (const k of ['hunger', 'thirst'] as const) if (b.needs[k] >= NEED_HINT) needs[k] = this.word(k, b.needs[k]);
+    const n = b.needs;
+    const urge = n.thirst >= AUTO_NEED && n.thirst >= n.hunger ? 'trinken' : n.hunger >= AUTO_NEED ? 'essen' : null;
+    const body = urge ? `Planst du nichts, geht dein Körper in ${MIND_GRACE} s selbst ${urge}.` : undefined;
+    b.events.push({ time: r2(this.simTime), type: status === 'done' ? 'plan_done' : 'plan_failed', plan_id: p.id, intent: p.intent, ...(error ? { step: p.idx + 1, error } : {}), ...(Object.keys(needs).length ? { needs } : {}), ...(body ? { body } : {}) });
     this.interruptWaits(b, status === 'done' ? 'plan_done' : 'plan_failed');
   }
 
@@ -1071,8 +1081,8 @@ export class World {
       const n = b.needs;
       let steps: Step[] | null = null;
       let why = '';
-      if (n.thirst >= 0.55 && n.thirst >= n.hunger && this.nearestSource(b, 'pond', false)) { steps = [{ type: 'drink' }]; why = 'trinken'; }
-      else if (n.hunger >= 0.55 && this.nearestSource(b, 'bush', true)) { steps = [{ type: 'eat' }]; why = 'essen'; }
+      if (n.thirst >= AUTO_NEED && n.thirst >= n.hunger && this.nearestSource(b, 'pond', false)) { steps = [{ type: 'drink' }]; why = 'trinken'; }
+      else if (n.hunger >= AUTO_NEED &&this.nearestSource(b, 'bush', true)) { steps = [{ type: 'eat' }]; why = 'essen'; }
       else if (n.boredom >= 0.7) { steps = [{ type: 'wander', radius: 12, seconds: 15 }]; why = 'umherschlendern'; }
       if (steps) {
         b.plan = { id: this.nextPlanId++, intent: `(von selbst) ${why}`, steps, idx: 0, status: 'running', auto: true, sub: {} };

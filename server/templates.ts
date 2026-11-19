@@ -113,7 +113,7 @@ curl -s -X POST ${baseUrl}/api/agent/input \\
 
 ### Bedürfnisse
 
-Dein Körper hat Hunger, Durst, Langeweile, Freude und Gesundheit (\`self.needs\`, je Zahl von 0 bis 1 und als Wort). Hunger und Durst steigen mit der Zeit; Beerenbüsche (\`berry_bush\`, wachsen langsam nach) und Teiche (\`pond\`) stillen sie. Bei Hunger oder Durst 1 verlierst du Gesundheit. Reden und Bewegung vertreiben Langeweile. Wird etwas dringend, bekommst du ein Event \`need_urgent\` und dein \`Wait\` endet. Kümmerst du dich nicht selbst, sucht dein Körper im Leerlauf von selbst Essen oder Wasser (\`self.plan.auto\`).
+Dein Körper hat Hunger, Durst, Langeweile, Freude und Gesundheit (\`self.needs\`, je Zahl von 0 bis 1 und als Wort). Hunger und Durst steigen mit der Zeit; Beerenbüsche (\`berry_bush\`, wachsen langsam nach) und Teiche (\`pond\`) stillen sie. Bei Hunger oder Durst 1 verlierst du Gesundheit. Reden und Bewegung vertreiben Langeweile. Wird etwas dringend, bekommst du ein Event \`need_urgent\` und dein \`Wait\` endet. Kümmerst du dich nicht selbst, sucht dein Körper im Leerlauf von selbst Essen oder Wasser (\`self.plan.auto\`). Nach \`plan_done\`/\`plan_failed\` lässt er dir 10 s Weltzeit Vortritt; bist du hungrig oder durstig, steht das im Event (\`needs\`, \`body\`). Bau Essen oder Trinken dann am besten gleich in deinen nächsten Plan ein.
 
 Sinkt deine Gesundheit unter 0.3, bekommst du \`health_low\`. **Bei Gesundheit 0 stirbst du.**
 
