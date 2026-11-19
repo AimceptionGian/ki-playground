@@ -21,7 +21,8 @@ Altern/Kinder/Tod, hörbare Stimmen). Plan und Reihenfolge: [SPEC.md](SPEC.md).
 ## Stand
 - Erledigt: Schritte 1–5 (Stimmen: `58232eb`; `server/voice.ts`, `client/src/voice.ts`, Event `{t:'voice'}`, `/voices` statisch)
 - Geprüft: Typecheck; `Voices.say` erzeugt echte WAV mit Piper (Skript im Scratchpad)
-- Ungeprüft: HTTP-Auslieferung `/voices/…` und Wiedergabe im Browser (Ton erst nach erstem Klick/Taste; Lautstärke 40/Abstand
+- Geprüft: HTTP-Auslieferung `/voices/…` (200, audio/wav)
+- Ungeprüft: Wiedergabe im Browser (Ton erst nach erstem Klick/Taste; Lautstärke 40/Abstand
   zur Kamera) – `PORT=4799 npm run dev`, Agent `say` auslösen, Ton hören
 - Ungeprüft: Browser-Darstellung Schritt 4 (Wippen, Kopf dreht zum Ziel, Idle-Atmen)
 - Ungeprüft: echter Lauf mit Claude-Code-Agenten (`Act`/`eat`/`drink`/`Reproduce`, Tod → `claude.exe` endet, Grab)
