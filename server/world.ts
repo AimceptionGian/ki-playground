@@ -371,6 +371,8 @@ export class World {
   }
 
   /** Alter aller Körper in Sekunden, zum Speichern. */
+  stageOf_(id: string): Stage { return this.bodies.get(id)?.stage ?? 'adult'; }
+
   ages(): Record<string, { age: number; nextBirthAge: number }> {
     return Object.fromEntries([...this.bodies.values()].map((b) => [b.id, { age: b.age, nextBirthAge: b.nextBirthAge }]));
   }

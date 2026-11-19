@@ -294,6 +294,14 @@ export class Scene {
     return { x: (v.x * 0.5 + 0.5) * this.host.clientWidth, y: (-v.y * 0.5 + 0.5) * this.host.clientHeight };
   }
 
+  /** Abstand der Kamera zu einem Agenten und Links-rechts-Lage im Bild (-1…1), oder null. */
+  audioPos(id: string): { dist: number; pan: number } | null {
+    const a = this.agents.get(id);
+    if (!a) return null;
+    const v = a.node.position.clone().project(this.camera);
+    return { dist: this.camera.position.distanceTo(a.node.position), pan: Math.max(-1, Math.min(1, v.x)) };
+  }
+
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
     const dt = Math.min(this.clock.getDelta(), 0.1);

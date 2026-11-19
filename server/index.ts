@@ -8,6 +8,7 @@ import react from '@vitejs/plugin-react';
 import { World, STATICS } from './world.ts';
 import { AgentStore, DATA_ROOT, type Agent, type Offspring } from './agents.ts';
 import { Runners } from './runner.ts';
+import { Voices } from './voice.ts';
 import { TOOLS, runTool, normalizeAction } from './tools.ts';
 
 const PORT = Number(process.env.PORT) || 4710;
@@ -16,6 +17,7 @@ const BASE = `http://localhost:${PORT}`;
 const world = await World.create();
 const store = new AgentStore(BASE);
 const runners = new Runners(world, store);
+const voices = new Voices();
 
 // Welt-Einstellungen überdauern einen Neustart
 const SETTINGS = path.join(DATA_ROOT, 'settings.json');
@@ -64,6 +66,7 @@ world.onDeath = (id, info) => {
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
+app.use('/voices', express.static(voices.dir, { maxAge: 0 }));
 const server = http.createServer(app);
 
 // ---------- Live-Verbindung zur Weboberfläche ----------
@@ -83,7 +86,10 @@ setInterval(() => store.scan(), 1000);
 runners.onChange = () => broadcast({ t: 'agents' });
 store.onUsage = (id, usage) => broadcast({ t: 'usage', id, usage });
 world.onReset = () => broadcast({ t: 'reset' });
-world.onSay = (id, text) => store.log(id, world.simTime, 'say', text.slice(0, 500));
+world.onSay = (id, text) => {
+  store.log(id, world.simTime, 'say', text.slice(0, 500));
+  voices.say(id, text, world.stageOf_(id), (s) => broadcast({ t: 'voice', id, ...s }));
+};
 
 let last = performance.now();
 let frame = 0;
