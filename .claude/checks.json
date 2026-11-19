@@ -1,0 +1,6 @@
+{
+  "checks": [
+    { "name": "Typecheck", "command": "npx tsc --noEmit" }
+  ],
+  "maxBlocks": 3
+}

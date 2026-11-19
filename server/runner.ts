@@ -1,8 +1,24 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
+import path from 'node:path';
+import { existsSync } from 'node:fs';
 import type { World } from './world.ts';
 import type { Agent, AgentStore } from './agents.ts';
 import { TOOLS, runTool } from './tools.ts';
+
+// Unter Windows liegt im PATH nur der npm-Shim claude.cmd, den spawn ohne Shell nicht startet.
+// Über cmd.exe wäre es heikel (mehrzeilige Prompts als Argumente), also die echte claude.exe suchen.
+// CLAUDE_BIN überschreibt die Suche.
+const CLAUDE_BIN = (() => {
+  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
+  if (process.platform !== 'win32') return 'claude';
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    for (const p of [path.join(dir, 'claude.exe'), path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')]) {
+      if (existsSync(p)) return p;
+    }
+  }
+  return 'claude';
+})();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ' …' : s);
@@ -174,7 +190,7 @@ export class Runners {
         const env = { ...process.env };
         delete env.CLAUDECODE;
         delete env.CLAUDE_CODE_ENTRYPOINT;
-        proc = spawn('claude', args, { cwd: store.dir(agent), env, stdio: ['ignore', 'pipe', 'pipe'] });
+        proc = spawn(CLAUDE_BIN, args, { cwd: store.dir(agent), env, stdio: ['ignore', 'pipe', 'pipe'] });
         stopped = false;
         // Verbrauch: laufend aus den einzelnen Antworten, am Ende mit der Abrechnung des Laufs abgeglichen
         const fields = ['input', 'cacheRead', 'cacheWrite', 'output'] as const;
