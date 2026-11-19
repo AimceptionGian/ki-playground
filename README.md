@@ -111,7 +111,7 @@ Agent anklicken, das Panel öffnet sich.
 - **Zeit läuft** (Echtzeit oder „Wenn alle warten"): siehe [Wartemodus](#wartemodus).
 - **Welt-Reset**: setzt Objekte und Körper auf Anfang und leert den Kontext der Agenten. Ihre Dateien bleiben. Geschieht automatisch nach der eingestellten Weltzeit (Standard 60 min, 0 = nie) oder über **Welt zurücksetzen**.
 - **Form des Felsens**: standardmässig ein kantiger Block, der liegen bleibt. Umgestellt auf „Kugel, rollt" wird er sofort an Ort und Stelle getauscht.
-- **Kamera**: ziehen dreht, Mausrad zoomt, Rechtsklick-Ziehen verschiebt. **Kamera folgt …** hält den gewählten Agenten im Bild.
+- **Kamera**: ziehen dreht, Mausrad zoomt. Shift oder Alt beim Ziehen (oder Rechtsklick-Ziehen) verschiebt den Drehpunkt über die Bodenebene. **Kamera folgt …** hält den gewählten Agenten im Bild.
 - **Tokenverbrauch** steht in der Agentenliste unter jedem Agenten, summiert über alle Sitzungen, als „neu" (erstmals gelesen), „Cache" (bekannter Kontext, der bei jeder Anfrage erneut mitgeht und nur rund ein Zehntel kostet) und „aus" (vom Modell geschrieben). Die Maus darauf zeigt die Aufteilung (neu, aus dem Cache, Ausgabe) und bei Claude Code die Kosten abgeschlossener Läufe. Für extern gesteuerte Agenten ist der Verbrauch nicht bekannt.
 - **Sprechblasen** zeigen, was ein Agent gerade denkt oder sagt.
 - **Meldungen unten links** erscheinen, wenn ein Agent in seine Dateien schreibt. Sie verschwinden nach zehn Sekunden; die Maus darauf hält sie fest, ✕ schliesst sie, ein Klick auf den Titel öffnet den Agenten.

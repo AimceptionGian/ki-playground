@@ -60,6 +60,12 @@ export class Scene {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(0, 2, 0);
     this.controls.enableDamping = true;
+    // Verschieben bewegt den Drehpunkt auf der Bodenebene statt in der Bildebene
+    this.controls.screenSpacePanning = false;
+    // Shift + Ziehen verschiebt von Haus aus; Alt + Ziehen soll dasselbe tun
+    this.renderer.domElement.addEventListener('pointerdown', (e) => {
+      this.controls.mouseButtons.LEFT = e.altKey ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+    }, { capture: true });
     this.controls.maxPolarAngle = Math.PI / 2 - 0.04;
     this.controls.minDistance = 6;
     this.controls.maxDistance = 260;
